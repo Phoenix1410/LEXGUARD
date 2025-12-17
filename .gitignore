@@ -1,0 +1,45 @@
+# Python System Files
+__pycache__/
+*.pyc
+
+# The Virtual Environment (We don't upload this)
+venv/
+.env
+# Common "loose" virtual environment folders (found in Backend)
+Lib/
+Scripts/
+Include/
+share/
+pyvenv.cfg
+
+# The AI Model (TOO BIG for GitHub - We ignore it)
+lexguard_model/
+lexguard_onnx/
+*.bin
+*.safetensors
+*.onnx
+
+# Data Files
+train_data.csv
+CUAD_v1.json
+lexguard.db
+
+# IDE Settings
+.vscode/
+.idea/
+
+# Frontend / Node.js
+node_modules/
+.next/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+out/
+build/
+results/
+checkpoints/
+**/checkpoint-*/
+**/runs/
+**/logs/
