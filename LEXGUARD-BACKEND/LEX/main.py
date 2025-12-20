@@ -5,8 +5,14 @@ from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassifica
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 import os
+import jwt
 import fitz  # PyMuPDF
 from dotenv import load_dotenv
+from typing import Dict, Optional
+
+# DB Imports
+from models import UserSync
+from database import db
 
 # 1. Setup App & Configuration
 load_dotenv()
@@ -73,6 +79,20 @@ def extract_text_from_pdf(file_bytes):
 @app.get("/")
 def health_check():
     return {"status": "LexGuard API is Ready", "gpu_active": True}
+
+@app.post("/users/sync")
+async def sync_user(user: UserSync):
+    """
+    Syncs user from Clerk Frontend to MongoDB Backend.
+    """
+    user_data = user.model_dump()
+    # Upsert based on clerk_id
+    result = await db.users.update_one(
+        {"clerk_id": user.clerk_id},
+        {"$set": user_data},
+        upsert=True
+    )
+    return {"status": "synced", "updated": result.modified_count > 0 or result.upserted_id is not None}
 
 @app.post("/analyze_document")
 async def analyze_document(
