@@ -5,12 +5,12 @@ __pycache__/
 # The Virtual Environment (We don't upload this)
 venv/
 .env
-# Common "loose" virtual environment folders (found in Backend)
-Lib/
-Scripts/
-Include/
-share/
-pyvenv.cfg
+# Common "loose" virtual environment folders
+LEXGUARD-BACKEND/LEX/Lib/
+LEXGUARD-BACKEND/LEX/Scripts/
+LEXGUARD-BACKEND/LEX/Include/
+LEXGUARD-BACKEND/LEX/share/
+LEXGUARD-BACKEND/LEX/pyvenv.cfg
 
 # The AI Model (TOO BIG for GitHub - We ignore it)
 lexguard_model/
