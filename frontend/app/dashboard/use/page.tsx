@@ -56,7 +56,8 @@ export default function UsePage() {
         }
 
         try {
-            const res = await axios.post<AnalysisResponse>("http://localhost:8000/analyze_document", formData, {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+            const res = await axios.post<AnalysisResponse>(`${apiUrl}/analyze_document`, formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
                 },
