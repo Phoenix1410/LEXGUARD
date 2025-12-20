@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+transformers
+langchain-groq
+langchain-core
+PyMuPDF
+python-dotenv
+pyjwt
+motor
+torch
+accelerate  # Optional, usually needed for transformers on some setups
