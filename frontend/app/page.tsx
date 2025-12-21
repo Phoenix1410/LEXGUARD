@@ -55,7 +55,7 @@ export default function Home() {
               </Link>
             </Button>
             <Button asChild variant="outline" size="lg" className="rounded-full px-8 text-lg h-12 backdrop-blur-md bg-white/5 border-white/10 hover:bg-white/10 dark:bg-black/20 dark:hover:bg-black/40">
-              <Link href="/login">
+              <Link href="/dashboard/use">
                 Get Started <ArrowRight className="ml-2 w-4 h-4" />
               </Link>
             </Button>

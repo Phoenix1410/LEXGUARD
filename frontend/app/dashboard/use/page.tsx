@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { useUser } from "@clerk/nextjs"
 import axios from "axios"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -72,16 +73,17 @@ export default function UsePage() {
     }
 
     const router = useRouter()
-    const [isAuthorized, setIsAuthorized] = useState(false)
+    const { isSignedIn, isLoaded } = useUser()
 
-    useEffect(() => {
-        const loggedIn = localStorage.getItem("isLoggedIn")
-        if (loggedIn) {
-            setIsAuthorized(true)
-        }
-    }, [])
+    if (!isLoaded) {
+        return (
+            <div className="flex h-[50vh] items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        )
+    }
 
-    if (!isAuthorized) {
+    if (!isSignedIn) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-6">
                 <motion.div
