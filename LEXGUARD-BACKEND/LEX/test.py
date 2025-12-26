@@ -1,7 +1,7 @@
 from transformers import pipeline
 
 # 1. Load your trained model from the folder
-model_path = "./lexguard_model"
+model_path = "./juridix_model"
 
 print("Loading model...")
 try:

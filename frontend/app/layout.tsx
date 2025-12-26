@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LexGuard | AI Legal Auditor",
+  title: "JURIDIX | AI Legal Auditor",
   description: "Automate contract review with predictive models and generative reasoning.",
 };
 

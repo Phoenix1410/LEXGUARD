@@ -1,6 +1,6 @@
-# LexGuard - AI Contract Analysis
+# JURIDIX - AI Contract Analysis
 
-LexGuard is an intelligent legal contract analysis platform that uses advanced Natural Language Processing (NLP) to detect risky clauses in legal documents. It combines the speed of local models (DistilRoBERTa) with the reasoning power of Large Language Models (LLaMA3 via Groq) to provide instant, explained risk assessments.
+JURIDIX is an intelligent legal contract analysis platform that uses advanced Natural Language Processing (NLP) to detect risky clauses in legal documents. It combines the speed of local models (DistilRoBERTa) with the reasoning power of Large Language Models (LLaMA3 via Groq) to provide instant, explained risk assessments.
 
 ## Features
 

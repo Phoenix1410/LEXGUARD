@@ -40,7 +40,7 @@ export default function RegisterPage() {
                     </div>
                     <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
                     <CardDescription>
-                        Get started with LexGuard AI analysis
+                        Get started with JURIDIX AI analysis
                     </CardDescription>
                 </CardHeader>
                 <form onSubmit={handleRegister}>

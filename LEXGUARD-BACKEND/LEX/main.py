@@ -16,7 +16,7 @@ from database import db
 
 # 1. Setup App & Configuration
 load_dotenv()
-app = FastAPI(title="LexGuard AI Core")
+app = FastAPI(title="JURIDIX AI Core")
 
 # --- CORS CONFIGURATION (CRITICAL FOR REACT) ---
 app.add_middleware(
@@ -28,7 +28,7 @@ app.add_middleware(
 )
 
 # --- MODEL PATHS ---
-MODEL_DIR = "./lexguard_model"
+MODEL_DIR = "./juridix_model"
 ABS_MODEL_PATH = os.path.abspath(MODEL_DIR)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -78,7 +78,7 @@ def extract_text_from_pdf(file_bytes):
 
 @app.get("/")
 def health_check():
-    return {"status": "LexGuard API is Ready", "gpu_active": True}
+    return {"status": "JURIDIX API is Ready", "gpu_active": True}
 
 @app.post("/users/sync")
 async def sync_user(user: UserSync):

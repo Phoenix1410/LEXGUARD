@@ -17,7 +17,7 @@ export default function Home() {
       <header className="container mx-auto px-6 py-6 flex items-center justify-between z-10">
         <div className="flex items-center gap-2 font-bold text-2xl tracking-tighter">
           <ShieldCheck className="w-8 h-8 text-primary" />
-          <span>LexGuard</span>
+          <span>JURIDIX</span>
         </div>
         <div className="flex items-center gap-4">
           <Link href="/login" className="text-sm font-medium hover:text-primary transition-colors">

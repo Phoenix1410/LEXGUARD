@@ -99,9 +99,9 @@ def run_training():
     trainer.train()
 
     # 7. Save Final Model
-    print("Saving model to ./lexguard_model...")
-    model.save_pretrained("./lexguard_model")
-    tokenizer.save_pretrained("./lexguard_model")
+    print("Saving model to ./juridix_model...")
+    model.save_pretrained("./juridix_model")
+    tokenizer.save_pretrained("./juridix_model")
     print("Done! You can now use this folder for inference.")
 
 if __name__ == "__main__":

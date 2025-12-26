@@ -10,4 +10,4 @@ if not MONGO_URI:
 
 # Create a global client instance
 client = AsyncIOMotorClient(MONGO_URI)
-db = client.lexguard_db  # Database name
+db = client.juridix_db  # Database name

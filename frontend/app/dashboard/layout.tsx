@@ -32,7 +32,7 @@ export default function DashboardLayout({
             <aside className="w-64 border-r border-white/10 bg-black/20 backdrop-blur-xl hidden md:flex flex-col fixed inset-y-0 z-30 shadow-2xl">
                 <div className="p-6 border-b border-white/10 flex items-center gap-2 font-bold text-xl text-white">
                     <ShieldCheck className="w-6 h-6 text-primary drop-shadow-[0_0_15px_rgba(0,100,255,0.5)]" />
-                    <span className="tracking-wide">LexGuard</span>
+                    <span className="tracking-wide">JURIDIX</span>
                 </div>
                 <nav className="flex-1 p-4 space-y-2">
                     {navItems.map((item) => {
