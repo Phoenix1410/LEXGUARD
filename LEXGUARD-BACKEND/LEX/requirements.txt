@@ -10,3 +10,5 @@ pyjwt
 motor
 torch
 accelerate  # Optional, usually needed for transformers on some setups
+sentence-transformers
+python-multipart

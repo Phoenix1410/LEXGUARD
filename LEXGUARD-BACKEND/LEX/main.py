@@ -1,183 +1,281 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Security, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 import os
-import jwt
 import fitz  # PyMuPDF
+import jwt   # PyJWT
+import numpy as np
+import torch
+import asyncio
 from dotenv import load_dotenv
-from typing import Dict, Optional
-
-# DB Imports
-from models import UserSync
-from database import db
 
 # 1. Setup App & Configuration
 load_dotenv()
-app = FastAPI(title="JURIDIX AI Core")
+app = FastAPI(title="LexGuard AI Core")
 
-# --- CORS CONFIGURATION (CRITICAL FOR REACT) ---
+from database import db
+from models import UserSync
+
+# --- CORS CONFIGURATION ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows localhost:3000, localhost:5173, etc.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- MODEL PATHS ---
-MODEL_DIR = "./juridix_model"
+# --- CONFIG & PATHS ---
+MODEL_DIR = "./lexguard_model"
 ABS_MODEL_PATH = os.path.abspath(MODEL_DIR)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")  # Set in your .env for production signature verification
 
-# 2. Load Models (The Sniper & The Analyst)
-print(f"Loading Predictive Model from: {ABS_MODEL_PATH}")
+# --- SECURITY (CLERK AUTH) ---
+security = HTTPBearer()
+
+def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    """Decodes and optionally verifies Clerk Token signatures."""
+    token = credentials.credentials
+    try:
+        if CLERK_JWKS_URL:
+            # Requires 'cryptography' package installed
+            jwks_client = jwt.PyJWKClient(CLERK_JWKS_URL)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                options={"verify_exp": True}
+            )
+        else:
+            # Fallback/Prototype mode (No signature check)
+            payload = jwt.decode(token, options={"verify_signature": False})
+            
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Subject identifier ('sub') missing from token")
+        return user_id
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {str(e)}",
+        )
+
+# --- LOAD MODELS ---
+
+# Dynamic device mapping (CUDA vs CPU fallback)
+device_id = 0 if torch.cuda.is_available() else -1
+device_name = "GPU (CUDA)" if device_id == 0 else "CPU"
+
+# 1. THE SNIPER (DistilRoBERTa - Risk Detection)
+print(f"Loading Sniper Model from: {ABS_MODEL_PATH}")
 try:
-    # Force local loading to prevent Hugging Face URL errors
-    model = AutoModelForSequenceClassification.from_pretrained(
-        ABS_MODEL_PATH, local_files_only=True
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        ABS_MODEL_PATH, local_files_only=True
-    )
-    # device=0 uses RTX 4060
-    classifier = pipeline("text-classification", model=model, tokenizer=tokenizer, device=0)
-    print("✅ Sniper Model Loaded on GPU")
+    model = AutoModelForSequenceClassification.from_pretrained(ABS_MODEL_PATH, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(ABS_MODEL_PATH, local_files_only=True)
+    sniper = pipeline("text-classification", model=model, tokenizer=tokenizer, device=device_id)
+    print(f"[OK] Sniper Model Loaded ({device_name})")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
+    print(f"[ERROR] Error loading Sniper: {e}")
     exit()
 
-llm = ChatGroq(
+# 2. THE SCOUT (Sentence-BERT - Semantic Search)
+print("Loading Scout Model (Semantic Search)...")
+try:
+    # Set device dynamically on sentence transformer if GPU is available
+    scout_device = "cuda" if torch.cuda.is_available() else "cpu"
+    scout = SentenceTransformer('all-MiniLM-L6-v2', device=scout_device) 
+    print(f"[OK] Scout Model Loaded ({scout_device.upper()})")
+except Exception as e:
+    print(f"[ERROR] Error loading Scout: {e}")
+    exit()
+
+# 3. THE ANALYST (Groq Llama-3 - Reasoning)
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY not found in environment.")
+
+analyst = ChatGroq(
     temperature=0,
     model_name="llama-3.3-70b-versatile",
     groq_api_key=GROQ_API_KEY
 )
 
-# 3. Helper: PDF to Text Chunks
-def extract_text_from_pdf(file_bytes):
-    """
-    Opens PDF bytes, extracts text, and splits into paragraphs (clauses).
-    """
+# --- HELPER FUNCTIONS ---
+
+def extract_text_from_pdf(file_bytes) -> list[str]:
+    """Parses PDF bytes into structured text blocks using spatial grouping."""
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     text_chunks = []
     
     for page in doc:
-        text = page.get_text("text")
-        # Split by double newline to find paragraphs
-        paragraphs = text.split('\n\n')
-        for p in paragraphs:
-            clean_p = " ".join(p.split()).strip()
-            # Filter out tiny page numbers or headers
-            if len(clean_p) > 50: 
-                text_chunks.append(clean_p)
+        # 'blocks' returns visual bounding box groups which preserve structural paragraphs
+        blocks = page.get_text("blocks")
+        for b in blocks:
+            text = b[4].strip()
+            # Standardize spacing and normalize line breaks
+            clean_text = " ".join(text.split()).strip()
+            # Filter short fragments, headers, or page numbers
+            if len(clean_text) > 50: 
+                text_chunks.append(clean_text)
     return text_chunks
 
-# 4. API Endpoints
+async def process_analyst_evaluation(clause: str, user_rule: str | None, source_str: str, index: int, pred_score: float, risk_type: str):
+    """Asynchronous wrapper to query the LLM concurrently for a flagged clause."""
+    system_msg = f"""
+    You are a legal auditor.
+    Detection Reason: {source_str}
+    User's Constraint Rule: {user_rule if user_rule else "None"}
+    
+    Task:
+    1. Summarize this clause in plain English.
+    2. If the user provided a rule, EXPLICITLY check if this clause violates it.
+    3. If it is risky, suggest a safer rewrite.
+    """
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_msg),
+        ("human", clause)
+    ])
+    
+    try:
+        # Utilize non-blocking async invoke
+        ai_response = await (prompt | analyst).ainvoke({})
+        explanation = ai_response.content
+    except Exception as e:
+        explanation = f"AI Error: {str(e)}"
+        
+    return {
+        "id": index,
+        "text": clause,
+        "risk_type": risk_type,
+        "confidence": round(pred_score, 4),
+        "explanation": explanation,
+        "source": source_str
+    }
+
+# --- API ENDPOINTS ---
 
 @app.get("/")
 def health_check():
-    return {"status": "JURIDIX API is Ready", "gpu_active": True}
+    return {"status": "LexGuard Brain is Online 🧠", "models": ["Sniper", "Scout", "Analyst"]}
 
 @app.post("/users/sync")
-async def sync_user(user: UserSync):
-    """
-    Syncs user from Clerk Frontend to MongoDB Backend.
-    """
-    user_data = user.model_dump()
-    # Upsert based on clerk_id
-    result = await db.users.update_one(
-        {"clerk_id": user.clerk_id},
-        {"$set": user_data},
-        upsert=True
-    )
-    return {"status": "synced", "updated": result.modified_count > 0 or result.upserted_id is not None}
+async def sync_user(user_data: UserSync):
+    """Saves or updates user profiles from Clerk sign-in/sync."""
+    try:
+        await db.users.update_one(
+            {"clerk_id": user_data.clerk_id},
+            {"$set": {
+                "email": user_data.email,
+                "name": user_data.name,
+                "updated_at": user_data.created_at
+            }},
+            upsert=True
+        )
+        return {"status": "User synced successfully", "clerk_id": user_data.clerk_id}
+    except Exception as e:
+        print(f"Error syncing user: {e}")
+        raise HTTPException(status_code=500, detail=f"Database sync failed: {str(e)}")
 
 @app.post("/analyze_document")
 async def analyze_document(
     file: UploadFile = File(...),
-    user_rule: str = Form(None) # React sends this as FormData
+    user_rule: str = Form(None),
+    user_id: str = Depends(verify_clerk_token)
 ):
-    """
-    Main Endpoint: Receives a PDF file + Optional User Rule.
-    Returns a list of Risky Clauses with GenAI explanations.
-    """
-    print(f"📥 Receiving file: {file.filename}")
+    print(f"📥 User {user_id} uploading: {file.filename}")
     
-    # A. Read & Parse PDF
+    # A. Parse PDF
     try:
         content = await file.read()
         clauses = extract_text_from_pdf(content)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid PDF: {str(e)}")
 
-    results = []
-    
-    # B. The Sniper Pass (Batch Prediction)
-    # We predict all clauses at once for speed
+    if not clauses:
+        return {
+            "filename": file.filename,
+            "total_clauses": 0,
+            "risks_found": 0,
+            "results": []
+        }
+
     print(f"🔍 Scanning {len(clauses)} clauses...")
     
-    # Map model output to human labels
+    # B. THE SNIPER PASS (Batch Classification)
     label_map = {"LABEL_0": "Safe", "LABEL_1": "Termination", "LABEL_2": "Non-Compete"}
     
-    # Run inference (This is fast on RTX 4060)
-    predictions = classifier(clauses, batch_size=8, truncation=True)
+    # Safety check: log warnings for text blocks exceeding model max context length (512 tokens)
+    for idx, clause in enumerate(clauses):
+        tokens = tokenizer.encode(clause, add_special_tokens=True)
+        if len(tokens) > 512:
+            print(f"⚠️ Warning: Clause {idx} exceeds 512 tokens. Text will be truncated for Sniper.")
 
-    # C. The Filter & Logic Pass
-    for i, (clause, pred) in enumerate(zip(clauses, predictions)):
-        label_str = pred['label']
-        score = pred['score']
-        risk_type = label_map.get(label_str, "Safe")
+    sniper_preds = sniper(clauses, batch_size=8, truncation=True)
 
-        # LOGIC: We only keep it if it's RISKY OR if User has a specific rule to check
-        # (We skip "Safe" clauses to save GenAI tokens and Frontend clutter)
-        is_risky = risk_type != "Safe"
-        has_rule = user_rule is not None and len(user_rule) > 5
+    # C. THE SCOUT PASS (Semantic Search)
+    semantic_matches = set()
+    
+    if user_rule and len(user_rule.strip()) > 5:
+        print(f"👀 Scout searching for rule: '{user_rule}'")
+        rule_vec = scout.encode([user_rule])
+        clause_vecs = scout.encode(clauses)
         
-        if is_risky or has_rule:
-            
-            explanation = "Standard standard clause."
-            
-            # D. The Analyst Pass (GenAI)
-            # Only call GenAI if it's actually risky or we need to check a rule
-            # If it's Safe but we have a rule, we ask GenAI to check that rule specifically
-            if is_risky or (has_rule and i < 20): # Limit rule checking to first 20 clauses for speed
-                
-                system_msg = f"""
-                You are a legal auditor.
-                Detected Risk Category: {risk_type} (Confidence: {score:.2f})
-                User's Constraint Rule: {user_rule if user_rule else "None"}
-                
-                Task:
-                1. Summarize what this clause says in plain English.
-                2. If a User Rule exists, explicitly state if this clause violates it.
-                3. If it is risky, suggest a 1-sentence edit to make it safer.
-                """
-                
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", system_msg),
-                    ("human", clause)
-                ])
-                
-                try:
-                    # Invoke Groq
-                    ai_response = (prompt | llm).invoke({})
-                    explanation = ai_response.content
-                except Exception as e:
-                    explanation = "AI Analysis unavailable."
+        sim_scores = cosine_similarity(rule_vec, clause_vecs)[0]
+        
+        # Take up to top 3 indices matching best scores
+        top_indices = np.argsort(sim_scores)[-3:] 
+        
+        for idx in top_indices:
+            if sim_scores[idx] > 0.30:  # Match threshold
+                semantic_matches.add(int(idx))
+                print(f"   -> Match at Clause {idx} (Score: {sim_scores[idx]:.2f})")
 
-            # Append to results
-            results.append({
-                "id": i,
-                "text": clause,
-                "risk_type": risk_type,
-                "confidence": round(score, 4),
-                "explanation": explanation
-            })
+    # D. CONCURRENT AGGREGATION & GENAI
+    analysis_tasks = []
+
+    for i, (clause, pred) in enumerate(zip(clauses, sniper_preds)):
+        label_str = pred['label']
+        risk_type = label_map.get(label_str, "Safe")
+        is_sniper_risk = risk_type != "Safe"
+        is_scout_match = i in semantic_matches
+        
+        if is_sniper_risk or is_scout_match:
+            detection_source = []
+            if is_sniper_risk: 
+                detection_source.append(f"Sniper Flagged ({risk_type})")
+            if is_scout_match: 
+                detection_source.append("Scout Matched User Rule")
+            
+            source_str = " + ".join(detection_source)
+            assigned_risk = risk_type if is_sniper_risk else "Potential Rule Violation"
+            
+            # Queue up the coroutine instead of executing instantly
+            task = process_analyst_evaluation(
+                clause=clause,
+                user_rule=user_rule,
+                source_str=source_str,
+                index=i,
+                pred_score=pred['score'],
+                risk_type=assigned_risk
+            )
+            analysis_tasks.append(task)
+
+    # Resolve all queued Groq tasks concurrently
+    if analysis_tasks:
+        results = await asyncio.gather(*analysis_tasks)
+    else:
+        results = []
 
     return {
         "filename": file.filename,
+        "total_clauses": len(clauses),
         "total_clauses_scanned": len(clauses),
         "risks_found": len(results),
         "results": results

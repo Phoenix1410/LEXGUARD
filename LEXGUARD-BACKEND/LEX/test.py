@@ -1,7 +1,7 @@
 from transformers import pipeline
 
 # 1. Load your trained model from the folder
-model_path = "./juridix_model"
+model_path = "./lexguard_model"
 
 print("Loading model...")
 try:
@@ -13,9 +13,9 @@ except Exception as e:
 
 # 2. Define the Mapping (Inverse of train.py)
 label_map = {
-    "LABEL_0": "✅ Safe / Background",
-    "LABEL_1": "⚠️ Risk: Termination",
-    "LABEL_2": "🛑 Risk: Non-Compete"
+    "LABEL_0": "Safe / Background",
+    "LABEL_1": "Risk: Termination",
+    "LABEL_2": "Risk: Non-Compete"
 }
 
 # 3. Test Cases

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { useUser } from "@clerk/nextjs"
+import { useUser, useAuth } from "@clerk/nextjs"
 import axios from "axios"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -29,6 +29,7 @@ interface AnalysisResponse {
 }
 
 export default function UsePage() {
+    const { getToken } = useAuth()
     const [file, setFile] = useState<File | null>(null)
     const [userRule, setUserRule] = useState("")
     const [loading, setLoading] = useState(false)
@@ -57,10 +58,12 @@ export default function UsePage() {
         }
 
         try {
+            const token = await getToken()
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
             const res = await axios.post<AnalysisResponse>(`${apiUrl}/analyze_document`, formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
+                    Authorization: `Bearer ${token}`,
                 },
             })
             setResponse(res.data)
