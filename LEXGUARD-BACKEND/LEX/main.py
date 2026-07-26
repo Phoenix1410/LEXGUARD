@@ -13,6 +13,7 @@ import jwt   # PyJWT
 import numpy as np
 import torch
 import asyncio
+import re
 from dotenv import load_dotenv
 import sys
 import io
@@ -28,7 +29,7 @@ load_dotenv()
 app = FastAPI(title="LexGuard AI Core")
 
 from database import db
-from models import UserSync
+from models import UserSync, Timeline, TimelineEvent, Discrepancy, ComparativeAnalysisResult
 
 # --- CORS CONFIGURATION ---
 app.add_middleware(
@@ -117,20 +118,46 @@ analyst = ChatGroq(
 # --- HELPER FUNCTIONS ---
 
 def extract_text_from_pdf(file_bytes) -> list[str]:
-    """Parses PDF bytes into structured text blocks using spatial grouping."""
+    """Parses PDF bytes into structured, bite-sized legal clause chunks."""
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     text_chunks = []
     
     for page in doc:
-        # 'blocks' returns visual bounding box groups which preserve structural paragraphs
+        # 'blocks' returns visual bounding box groups
         blocks = page.get_text("blocks")
         for b in blocks:
-            text = b[4].strip()
-            # Standardize spacing and normalize line breaks
-            clean_text = " ".join(text.split()).strip()
-            # Filter short fragments, headers, or page numbers
-            if len(clean_text) > 50: 
+            raw_text = b[4].strip()
+            if not raw_text:
+                continue
+                
+            clean_text = " ".join(raw_text.split()).strip()
+            if len(clean_text) <= 50:
+                continue
+
+            # If block is large (> 250 chars), break into logical sub-clauses at sentence/section boundaries
+            if len(clean_text) > 250:
+                # Split at periods, colons, semi-colons followed by new thoughts/capital letters
+                sub_clauses = re.split(r'(?<=[.!?])\s+(?=[A-Z0-9("])|(?<=;)\s+(?=[A-Z0-9("])', clean_text)
+                current_chunk = ""
+                
+                for clause in sub_clauses:
+                    clause_str = clause.strip()
+                    if not clause_str:
+                        continue
+                    
+                    # Accumulate sentences into coherent ~150-250 character clause chunks
+                    if len(current_chunk) + len(clause_str) < 250:
+                        current_chunk = f"{current_chunk} {clause_str}".strip() if current_chunk else clause_str
+                    else:
+                        if current_chunk and len(current_chunk) > 40:
+                            text_chunks.append(current_chunk)
+                        current_chunk = clause_str
+                
+                if current_chunk and len(current_chunk) > 40:
+                    text_chunks.append(current_chunk)
+            else:
                 text_chunks.append(clean_text)
+                
     return text_chunks
 
 async def process_analyst_evaluation(clause: str, user_rule: str | None, source_str: str, index: int, pred_score: float, risk_type: str):
@@ -288,3 +315,113 @@ async def analyze_document(
         "risks_found": len(results),
         "results": results
     }
+
+# --- TESTIMONY VALIDATOR (Map-Reduce) ---
+
+async def extract_timeline(transcript_text: str, party_name: str) -> Timeline:
+    """Map Phase: Extract chronological events from a single transcript."""
+    print(f"[MAP] Extracting timeline for {party_name}...")
+    structured_analyst = analyst.with_structured_output(Timeline)
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", f"You are a forensic legal analyst. Extract a chronological timeline of events for the {party_name} from the provided testimony transcript. Ensure exact source quotes are included for each event."),
+        ("human", transcript_text)
+    ])
+    
+    try:
+        timeline = await (prompt | structured_analyst).ainvoke({})
+        return timeline
+    except Exception as e:
+        print(f"[ERROR] Failed to extract timeline for {party_name}: {e}")
+        # Return empty timeline on failure
+        return Timeline(party=party_name, events=[])
+
+async def compare_timelines(client_timeline: Timeline, accused_timeline: Timeline) -> ComparativeAnalysisResult:
+    """Reduce Phase: Compare the extracted timelines to find discrepancies."""
+    print(f"[REDUCE] Comparing timelines...")
+    
+    # Create a temporary container model since with_structured_output expects a Pydantic class
+    class DiscrepancyReport(BaseModel):
+        discrepancies: list[Discrepancy]
+        
+    structured_analyst = analyst.with_structured_output(DiscrepancyReport)
+    
+    system_prompt = """
+    You are a forensic legal auditor comparing two testimony timelines: one from the Client, one from the Accused.
+    Your task is to identify discrepancies strictly based on these two rules:
+    1. Direct Conflict: The Client and Accused state directly opposing facts about the same event.
+    2. Omission: One party mentions a critical event or detail that the other party completely leaves out.
+    
+    For each discrepancy, classify it, describe the timeframe, provide both versions (if available), and explain your reasoning.
+    Assign a severity (High, Medium, Low) based on its potential legal impact.
+    """
+    
+    human_prompt = f"""
+    === CLIENT TIMELINE ===
+    {client_timeline.model_dump_json(indent=2)}
+    
+    === ACCUSED TIMELINE ===
+    {accused_timeline.model_dump_json(indent=2)}
+    """
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("human", human_prompt)
+    ])
+    
+    try:
+        report = await (prompt | structured_analyst).ainvoke({})
+        return ComparativeAnalysisResult(
+            client_timeline=client_timeline,
+            accused_timeline=accused_timeline,
+            discrepancies=report.discrepancies
+        )
+    except Exception as e:
+        print(f"[ERROR] Failed to compare timelines: {e}")
+        return ComparativeAnalysisResult(
+            client_timeline=client_timeline,
+            accused_timeline=accused_timeline,
+            discrepancies=[]
+        )
+
+@app.post("/compare_testimonies", response_model=ComparativeAnalysisResult)
+async def analyze_testimonies(
+    client_file: UploadFile = File(None),
+    client_text: str = Form(None),
+    accused_file: UploadFile = File(None),
+    accused_text: str = Form(None),
+    user_id: str = Depends(verify_clerk_token)
+):
+    """
+    Testimony Validator Endpoint:
+    Accepts two testimony transcripts (Client and Accused) via file upload or raw text.
+    Executes a Map-Reduce LLM pipeline to extract timelines and flag discrepancies.
+    """
+    print(f"[API] Testimony Validator requested by user {user_id}")
+    
+    # 1. Resolve Inputs
+    async def resolve_input(file: UploadFile, text: str) -> str:
+        if file:
+            content = await file.read()
+            clauses = extract_text_from_pdf(content)
+            return " ".join(clauses)
+        elif text:
+            return text
+        else:
+            raise HTTPException(status_code=400, detail="Missing testimony input (provide file or text).")
+            
+    client_content = await resolve_input(client_file, client_text)
+    accused_content = await resolve_input(accused_file, accused_text)
+    
+    # 2. Map Phase: Extract Timelines (Concurrent)
+    print("[MAP Phase] Starting concurrent extraction...")
+    client_timeline, accused_timeline = await asyncio.gather(
+        extract_timeline(client_content, "Client"),
+        extract_timeline(accused_content, "Accused")
+    )
+    
+    # 3. Reduce Phase: Comparative Analysis
+    print("[REDUCE Phase] Starting comparative analysis...")
+    result = await compare_timelines(client_timeline, accused_timeline)
+    
+    return result

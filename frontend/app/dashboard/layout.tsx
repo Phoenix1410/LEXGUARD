@@ -3,7 +3,7 @@
 import { useRef } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { ShieldCheck, LayoutDashboard, FileInput, LogOut, FileText } from "lucide-react"
+import { ShieldCheck, LayoutDashboard, FileInput, LogOut, FileText, Scale } from "lucide-react"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -24,6 +24,7 @@ export default function DashboardLayout({
     const navItems = [
         { href: "/dashboard/demo", label: "View Demo", icon: FileText },
         { href: "/dashboard/use", label: "Analyze Contract", icon: FileInput },
+        { href: "/dashboard/testimony", label: "Testimony Validator", icon: Scale },
     ]
 
     return (
