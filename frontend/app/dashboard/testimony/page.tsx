@@ -333,7 +333,7 @@ export default function TestimonyValidatorPage() {
                                                                 </Badge>
                                                             </div>
                                                             <CardTitle className="text-lg text-foreground/90 leading-tight">
-                                                                <ReactMarkdown className="prose prose-invert max-w-none prose-p:m-0 text-sm">{disc.analysis}</ReactMarkdown>
+                                                                <div className="prose prose-invert max-w-none prose-p:m-0 text-sm"><ReactMarkdown>{disc.analysis}</ReactMarkdown></div>
                                                             </CardTitle>
                                                         </div>
                                                     </div>
