@@ -14,6 +14,14 @@ import numpy as np
 import torch
 import asyncio
 from dotenv import load_dotenv
+import sys
+import io
+
+# Ensure UTF-8 stdout on Windows
+if sys.stdout and hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'buffer'):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 1. Setup App & Configuration
 load_dotenv()
@@ -189,7 +197,7 @@ async def analyze_document(
     user_rule: str = Form(None),
     user_id: str = Depends(verify_clerk_token)
 ):
-    print(f"📥 User {user_id} uploading: {file.filename}")
+    print(f"[UPLOADING] User {user_id} uploading: {file.filename}")
     
     # A. Parse PDF
     try:
@@ -206,7 +214,7 @@ async def analyze_document(
             "results": []
         }
 
-    print(f"🔍 Scanning {len(clauses)} clauses...")
+    print(f"[SCANNING] Scanning {len(clauses)} clauses...")
     
     # B. THE SNIPER PASS (Batch Classification)
     label_map = {"LABEL_0": "Safe", "LABEL_1": "Termination", "LABEL_2": "Non-Compete"}
@@ -215,7 +223,7 @@ async def analyze_document(
     for idx, clause in enumerate(clauses):
         tokens = tokenizer.encode(clause, add_special_tokens=True)
         if len(tokens) > 512:
-            print(f"⚠️ Warning: Clause {idx} exceeds 512 tokens. Text will be truncated for Sniper.")
+            print(f"[WARNING] Clause {idx} exceeds 512 tokens. Text will be truncated for Sniper.")
 
     sniper_preds = sniper(clauses, batch_size=8, truncation=True)
 
@@ -223,7 +231,7 @@ async def analyze_document(
     semantic_matches = set()
     
     if user_rule and len(user_rule.strip()) > 5:
-        print(f"👀 Scout searching for rule: '{user_rule}'")
+        print(f"[SCOUT] Scout searching for rule: '{user_rule}'")
         rule_vec = scout.encode([user_rule])
         clause_vecs = scout.encode(clauses)
         
