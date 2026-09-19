@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useUser } from "@clerk/nextjs"
 import axios from "axios"
+import { getApiUrl } from "@/lib/api-config"
 
 export default function DashboardPage() {
     const router = useRouter()
@@ -14,7 +15,7 @@ export default function DashboardPage() {
             // Sync user to backend
             const syncUser = async () => {
                 try {
-                    await axios.post(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/sync`, {
+                    await axios.post(`${getApiUrl('/users/sync')}/users/sync`, {
                         clerk_id: user.id,
                         email: user.primaryEmailAddress?.emailAddress,
                         name: user.fullName,

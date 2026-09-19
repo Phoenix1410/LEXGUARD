@@ -13,6 +13,7 @@ import { AlertCircle, CheckCircle, UploadCloud, FileText, Loader2, Sparkles, Shi
 import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from "framer-motion"
 import ThreeScannerCanvas from "@/components/three/ThreeScannerCanvas"
+import { getApiUrl } from "@/lib/api-config"
 
 interface AnalysisResult {
     id: number
@@ -68,7 +69,7 @@ export default function UsePage() {
 
         try {
             const token = await getToken()
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+            const apiUrl = getApiUrl('/analyze_document')
             const res = await axios.post<AnalysisResponse>(`${apiUrl}/analyze_document`, formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",

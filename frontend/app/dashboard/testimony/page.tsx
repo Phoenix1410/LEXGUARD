@@ -13,6 +13,7 @@ import { AlertCircle, CheckCircle, UploadCloud, FileText, Loader2, Sparkles, Shi
 import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from "framer-motion"
 import ThreeTimelineCanvas from "@/components/three/ThreeTimelineCanvas"
+import { getApiUrl } from "@/lib/api-config"
 
 interface TimelineEvent {
     timeframe: string
@@ -89,7 +90,7 @@ export default function TestimonyValidatorPage() {
 
         try {
             const token = await getToken()
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+            const apiUrl = getApiUrl('/compare_testimonies')
             const res = await axios.post<ComparativeAnalysisResult>(`${apiUrl}/compare_testimonies`, formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
