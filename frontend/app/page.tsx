@@ -4,23 +4,36 @@ import { Button } from "@/components/ui/button"
 import { ModeToggle } from "@/components/mode-toggle"
 import { motion } from "framer-motion"
 import Link from "next/link"
-import { ArrowRight, ShieldCheck, FileText, Zap } from "lucide-react"
+import { ArrowRight, ShieldCheck, FileText, Zap, Sparkles, Scale, CheckCircle2 } from "lucide-react"
+import ThreeShieldCanvas from "@/components/three/ThreeShieldCanvas"
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen flex flex-col overflow-hidden bg-gradient-to-br from-indigo-500/20 via-background to-purple-500/20">
-      {/* Background Orbs */}
-      <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] rounded-full bg-purple-500/30 blur-[100px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] rounded-full bg-blue-500/30 blur-[100px] pointer-events-none" />
+    <div className="relative min-h-screen flex flex-col overflow-hidden bg-background">
+      {/* Dynamic 3D Cyber Shield Backdrop */}
+      <div className="absolute inset-0 z-0 pointer-events-none opacity-80">
+        <ThreeShieldCanvas className="w-full h-full" interactive={true} intensity="vibrant" />
+      </div>
+
+      {/* Ambient Radial Glows */}
+      <div className="absolute top-[-10%] left-[-10%] w-[550px] h-[550px] rounded-full bg-cyan-500/15 blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[550px] h-[550px] rounded-full bg-indigo-500/20 blur-[130px] pointer-events-none" />
 
       {/* Navbar */}
-      <header className="container mx-auto px-6 py-6 flex items-center justify-between z-10">
-        <div className="flex items-center gap-2 font-bold text-2xl tracking-tighter">
-          <ShieldCheck className="w-8 h-8 text-primary" />
-          <span>JURIDIX</span>
+      <header className="container mx-auto px-6 py-6 flex items-center justify-between z-20 relative">
+        <div className="flex items-center gap-2.5 font-extrabold text-2xl tracking-tighter">
+          <div className="w-10 h-10 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.4)]">
+            <ShieldCheck className="w-6 h-6 text-primary drop-shadow-[0_0_10px_rgba(56,189,248,0.8)]" />
+          </div>
+          <span className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-transparent">
+            JURIDIX
+          </span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm font-medium hover:text-primary transition-colors">
+          <Link
+            href="/login"
+            className="text-sm font-semibold text-muted-foreground hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+          >
             Sign In
           </Link>
           <ModeToggle />
@@ -28,73 +41,92 @@ export default function Home() {
       </header>
 
       {/* Hero Content */}
-      <main className="flex-1 container mx-auto px-6 flex flex-col items-center justify-center text-center z-10">
+      <main className="flex-1 container mx-auto px-6 flex flex-col items-center justify-center text-center z-10 relative pt-8 pb-16">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
-          className="max-w-3xl space-y-6"
+          className="max-w-4xl space-y-6"
         >
-          <div className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-sm font-medium text-primary backdrop-blur-md">
-            <Zap className="mr-2 h-3.5 w-3.5" />
-            AI-Powered Legal Auditor
+          <div className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-xs font-mono font-medium text-cyan-300 backdrop-blur-xl shadow-[0_0_20px_rgba(56,189,248,0.2)]">
+            <Zap className="mr-2 h-3.5 w-3.5 text-cyan-400 animate-pulse" />
+            3D Neural Legal Intelligence & Forensics
           </div>
 
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
-            Automate Contract Review with <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-purple-600">Precision</span>
+          <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[1.05]">
+            Automate Contract Review with{" "}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 drop-shadow-[0_0_35px_rgba(56,189,248,0.4)]">
+              Hyper-Precision
+            </span>
           </h1>
 
-          <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-            Instantly detect high-risk clauses and generate plain-English explanations using our hybrid AI engine.
+          <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Instantly detect high-risk clauses, cross-examine testimonies with Map-Reduce, and generate forensic explanations powered by local neural models and Groq LLMs.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
-            <Button asChild size="lg" className="rounded-full px-8 text-lg h-12 shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-shadow">
-              <Link href="/dashboard/demo">
-                View Demo Dashboard
+            <Button
+              asChild
+              size="lg"
+              className="rounded-xl px-8 text-base h-13 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold shadow-[0_0_30px_rgba(56,189,248,0.4)] transition-all"
+            >
+              <Link href="/dashboard/use">
+                <Sparkles className="mr-2 h-4 w-4" /> Start AI Contract Audit
               </Link>
             </Button>
-            <Button asChild variant="outline" size="lg" className="rounded-full px-8 text-lg h-12 backdrop-blur-md bg-white/5 border-white/10 hover:bg-white/10 dark:bg-black/20 dark:hover:bg-black/40">
-              <Link href="/dashboard/use">
-                Get Started <ArrowRight className="ml-2 w-4 h-4" />
+            <Button
+              asChild
+              variant="outline"
+              size="lg"
+              className="rounded-xl px-8 text-base h-13 backdrop-blur-xl bg-white/5 border-white/15 hover:bg-white/10 hover:border-cyan-400/40 transition-all font-semibold"
+            >
+              <Link href="/dashboard/testimony">
+                <Scale className="mr-2 h-4 w-4 text-amber-400" /> Testimony Validator
               </Link>
             </Button>
           </div>
         </motion.div>
 
-        {/* Floating Cards Demo */}
-        <div className="mt-20 w-full max-w-6xl relative h-[400px] hidden md:block">
+        {/* Floating 3D Card Preview */}
+        <div className="mt-16 w-full max-w-4xl relative hidden md:block">
           <motion.div
-            initial={{ opacity: 0, rotateX: 20, y: 100 }}
+            initial={{ opacity: 0, rotateX: 20, y: 60 }}
             animate={{ opacity: 1, rotateX: 0, y: 0 }}
-            transition={{ delay: 0.4, duration: 1 }}
-            className="absolute left-1/2 -translate-x-1/2 top-0 perspective-1000"
+            transition={{ delay: 0.3, duration: 0.8 }}
+            className="perspective-1000"
           >
-            <div className="relative w-[800px] h-[500px] rounded-xl border border-white/20 bg-background/50 backdrop-blur-xl shadow-2xl overflow-hidden p-6 transform rotate-x-12 hover:rotate-x-0 transition-transform duration-700 ease-out">
-              <div className="flex items-center gap-4 border-b border-border/50 pb-4 mb-4">
-                <div className="w-12 h-12 rounded-lg bg-red-500/20 flex items-center justify-center">
-                  <FileText className="text-red-500" />
+            <div className="relative rounded-2xl border border-white/20 bg-black/40 backdrop-blur-2xl shadow-2xl overflow-hidden p-6 text-left hover:border-cyan-500/40 transition-all duration-500">
+              <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base text-white">Live Forensic Pipeline Active</h3>
+                    <p className="text-xs font-mono text-cyan-400">Sniper + Scout + Analyst</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-semibold text-lg">Non-Compete Clause Detected</h3>
-                  <p className="text-sm text-muted-foreground">Confidence Score: 98%</p>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="text-xs font-mono text-emerald-400 uppercase tracking-wider">Models Loaded</span>
                 </div>
-                <div className="ml-auto px-3 py-1 rounded-full bg-red-500/10 text-red-500 text-xs font-bold">HIGH RISK</div>
               </div>
-              <div className="space-y-4">
-                <div className="h-4 bg-muted/50 rounded w-3/4 animate-pulse" />
-                <div className="h-4 bg-muted/50 rounded w-full animate-pulse" />
-                <div className="h-4 bg-muted/50 rounded w-5/6 animate-pulse" />
-              </div>
-              {/* Faux UI elements */}
-              <div className="mt-8 grid grid-cols-2 gap-4">
-                <div className="h-24 rounded-lg bg-muted/30 border border-border/50 p-4">
-                  <div className="font-medium text-sm mb-2">Analysis</div>
-                  <div className="text-xs text-muted-foreground">The clause duration exceeds the standard 1 year limit...</div>
+
+              <div className="grid md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-1">
+                  <div className="text-xs font-mono uppercase text-muted-foreground">The Sniper</div>
+                  <div className="font-bold text-sm text-cyan-300">DistilRoBERTa Classifier</div>
+                  <p className="text-[11px] text-muted-foreground">Instant sub-millisecond clause categorization.</p>
                 </div>
-                <div className="h-24 rounded-lg bg-muted/30 border border-border/50 p-4">
-                  <div className="font-medium text-sm mb-2">Suggestion</div>
-                  <div className="text-xs text-muted-foreground">Consider reducing the restriction period...</div>
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-1">
+                  <div className="text-xs font-mono uppercase text-muted-foreground">The Scout</div>
+                  <div className="font-bold text-sm text-indigo-300">Sentence-BERT Vectors</div>
+                  <p className="text-[11px] text-muted-foreground">Cosine similarity against custom client rules.</p>
+                </div>
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-1">
+                  <div className="text-xs font-mono uppercase text-muted-foreground">The Analyst</div>
+                  <div className="font-bold text-sm text-purple-300">Groq LLM Reasoning</div>
+                  <p className="text-[11px] text-muted-foreground">Structured forensic output & automated redlines.</p>
                 </div>
               </div>
             </div>
