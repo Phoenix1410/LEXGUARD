@@ -39,7 +39,7 @@ export function getApiUrl(endpoint?: string): string {
   
   // Production HuggingFace Spaces URL (contains full AI stack)
   // Allow override via environment variable for flexibility
-  const productionUrl = process.env.NEXT_PUBLIC_PRODUCTION_API_URL || 'https://huggingface.co/spaces/Phoenix1410/LEXGUARD_API'
+  const productionUrl =process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || 'https://phoenix1410-lexguard-api.hf.space';
   
   // Check if we're in production environment
   if (isProductionEnvironment()) {
@@ -110,7 +110,7 @@ export function getEnvironmentInfo() {
     vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV,
     apiUrl: getApiUrl(),
     developmentUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
-    productionUrl: process.env.NEXT_PUBLIC_PRODUCTION_API_URL || 'https://huggingface.co/spaces/Phoenix1410/LEXGUARD_API'
+    productionUrl: process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || 'https://phoenix1410-lexguard-api.hf.space'
   }
 }
 

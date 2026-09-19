@@ -1,0 +1,162 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test": {
+      "status": "passed",
+      "failingExample": "**Bug Condition Confirmed - Test Failed as Expected:**\n\n**Primary Failure (analyze_document):**\n- AssertionError: Result 1 should have AI-generated explanation, but got empty string  \n- Expected behavior: AI explanations should be present when routing to HuggingFace Spaces backend\n- Actual: localhost:8000 backend lacks GROQ_API_KEY/ChatGroq capabilities\n\n**Secondary Failure (compare_testimonies):**  \n- AssertionError: Client timeline events should have AI explanations but are empty due to routing bug\n- Both client_timeline.events and accused_timeline.events have empty explanation fields\n- Discrepancy analysis also lacks AI explanations\n\n**Root Cause Analysis:**\n1. Production deployment routes API calls to localhost:8000 (Docker backend)\n2. Docker backend lacks GROQ_API_KEY and ChatGroq functionality\n3. process_analyst_evaluation function fails to execute properly\n4. Missing AI capabilities result in empty explanation fields in response objects\n5. Same issue affects both /analyze_document and /compare_testimonies endpoints\n\n**Counterexamples Documented:**\n- API URL: http://localhost:8000 (should be HuggingFace Spaces URL)\n- Missing AI explanations in 2 analysis results and timeline events\n- Confirms production deployment lacks AI functionality routing",
+      "lastRunTimestamp": 1789831524346
+    },
+    "2. Write preservation property tests (BEFORE implementing fix)": {
+      "status": "passed",
+      "lastRunTimestamp": 1789831929821
+    },
+    "3.4 Verify bug condition exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1789835583511
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration test": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124590
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831135036
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831575923
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing fix)": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124695
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831581557
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831958244
+      }
+    ],
+    "3.1 Implement environment detection and API URL selection logic": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124773
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831964094
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789833767076
+      }
+    ],
+    "3.2 Configure production environment variables": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124830
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789833773024
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789834626659
+      }
+    ],
+    "3.3 Validate HuggingFace Spaces backend endpoint compatibility": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124881
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789834632797
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835403059
+      }
+    ],
+    "3.4 Verify bug condition exploration test now passes": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124922
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835408897
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835610604
+      }
+    ],
+    "3.5 Verify preservation tests still pass": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831124959
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835616741
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835702360
+      }
+    ],
+    "4. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789831125022
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835708602
+      },
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835999768
+      }
+    ],
+    "3. Fix for LEXGUARD AI Backend Routing": [
+      {
+        "executionId": "495142ea-65f3-4ce2-b6c1-f889b567cc8f",
+        "chatSessionId": "sess_ec419af7-2fa8-4e37-b0d7-dc848a72e843",
+        "timestamp": 1789835702422
+      }
+    ]
+  }
+}
