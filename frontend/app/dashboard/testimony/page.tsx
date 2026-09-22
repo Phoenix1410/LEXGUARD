@@ -9,7 +9,22 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
-import { AlertCircle, CheckCircle, UploadCloud, FileText, Loader2, Sparkles, ShieldCheck, Scale, History, Clock, FileEdit, Zap, ArrowRight, RefreshCw } from "lucide-react"
+import { 
+    AlertCircle, 
+    CheckCircle, 
+    UploadCloud, 
+    FileText, 
+    Loader2, 
+    Sparkles, 
+    ShieldCheck, 
+    Scale, 
+    History, 
+    Clock, 
+    FileEdit, 
+    Zap, 
+    ArrowRight, 
+    RefreshCw 
+} from "lucide-react"
 import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from "framer-motion"
 import ThreeTimelineCanvas from "@/components/three/ThreeTimelineCanvas"
@@ -31,8 +46,10 @@ interface Discrepancy {
     timeframe: string
     client_version?: string
     accused_version?: string
-    analysis: string
-    severity: string
+    analysis?: string
+    reasoning?: string
+    explanation?: string
+    severity?: string
 }
 
 interface ComparativeAnalysisResult {
@@ -90,8 +107,14 @@ export default function TestimonyValidatorPage() {
 
         try {
             const token = await getToken()
-            const apiUrl = getApiUrl('/compare_testimonies')
-            const res = await axios.post<ComparativeAnalysisResult>(`${apiUrl}/compare_testimonies`, formData, {
+            
+            // Safe URL resolution avoiding double-path bugs
+            const resolvedUrl = getApiUrl('/compare_testimonies')
+            const targetEndpoint = resolvedUrl.endsWith('/compare_testimonies')
+                ? resolvedUrl
+                : `${resolvedUrl.replace(/\/$/, '')}/compare_testimonies`
+
+            const res = await axios.post<ComparativeAnalysisResult>(targetEndpoint, formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
                     Authorization: `Bearer ${token || "demo_token"}`,
@@ -99,8 +122,22 @@ export default function TestimonyValidatorPage() {
             })
             setResponse(res.data)
         } catch (err: any) {
-            console.error(err)
-            const msg = err?.response?.data?.detail || "Failed to validate testimonies. Ensure backend is running."
+            console.error("[Testimony Validation Error]", err)
+            
+            // Defend against FastAPI 422 array objects or malformed errors
+            let msg = "Failed to validate testimonies. Ensure backend is running."
+            if (err?.response?.data?.detail) {
+                const detail = err.response.data.detail
+                if (typeof detail === "string") {
+                    msg = detail
+                } else if (Array.isArray(detail)) {
+                    msg = detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+                } else {
+                    msg = JSON.stringify(detail)
+                }
+            } else if (err?.message) {
+                msg = err.message
+            }
             setError(msg)
         } finally {
             setLoading(false)
@@ -151,53 +188,56 @@ export default function TestimonyValidatorPage() {
         )
     }
 
-    // Helper component for timeline rendering
-    const TimelineView = ({ timeline, accentColor }: { timeline: Timeline; accentColor: "cyan" | "amber" }) => (
-        <Card className={`glass-card hover-pop h-full border ${accentColor === "cyan" ? "border-cyan-500/30" : "border-amber-500/30"
-            }`}>
-            <CardHeader className="pb-4 border-b border-white/5">
-                <div className="flex items-center justify-between">
-                    <CardTitle className="text-xl flex items-center gap-2">
-                        <History className={`w-5 h-5 ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"}`} />
-                        {timeline.party} Timeline
-                    </CardTitle>
-                    <Badge variant="outline" className={`text-xs font-mono ${accentColor === "cyan"
-                        ? "text-cyan-400 border-cyan-500/30 bg-cyan-500/10"
-                        : "text-amber-400 border-amber-500/30 bg-amber-500/10"
-                        }`}>
-                        {timeline.events.length} Events Logged
-                    </Badge>
-                </div>
-            </CardHeader>
-            <CardContent className="pt-6">
-                <div className="space-y-6 relative before:absolute before:inset-0 before:left-5 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/20 before:to-transparent">
-                    {timeline.events.map((event, idx) => (
-                        <div key={idx} className="relative flex items-start gap-4">
-                            <div className={`flex items-center justify-center w-10 h-10 rounded-full border bg-black/60 backdrop-blur-md shadow shrink-0 z-10 ${accentColor === "cyan" ? "border-cyan-400 text-cyan-400" : "border-amber-400 text-amber-400"
-                                }`}>
-                                <Clock className="w-4 h-4" />
-                            </div>
-                            <div className="flex-1 p-4 rounded-xl border border-white/10 bg-black/30 backdrop-blur shadow-md">
-                                <div className="flex items-center justify-between mb-1.5">
-                                    <div className={`font-mono text-xs font-bold uppercase tracking-wider ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"
-                                        }`}>
-                                        {event.timeframe}
+    const TimelineView = ({ timeline, accentColor }: { timeline?: Timeline; accentColor: "cyan" | "amber" }) => {
+        const events = timeline?.events || []
+        const partyName = timeline?.party || "Party"
+
+        return (
+            <Card className={`glass-card hover-pop h-full border ${accentColor === "cyan" ? "border-cyan-500/30" : "border-amber-500/30"}`}>
+                <CardHeader className="pb-4 border-b border-white/5">
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-xl flex items-center gap-2">
+                            <History className={`w-5 h-5 ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"}`} />
+                            {partyName} Timeline
+                        </CardTitle>
+                        <Badge variant="outline" className={`text-xs font-mono ${accentColor === "cyan"
+                            ? "text-cyan-400 border-cyan-500/30 bg-cyan-500/10"
+                            : "text-amber-400 border-amber-500/30 bg-amber-500/10"
+                            }`}>
+                            {events.length} Events Logged
+                        </Badge>
+                    </div>
+                </CardHeader>
+                <CardContent className="pt-6">
+                    <div className="space-y-6 relative before:absolute before:inset-0 before:left-5 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/20 before:to-transparent">
+                        {events.map((event, idx) => (
+                            <div key={idx} className="relative flex items-start gap-4">
+                                <div className={`flex items-center justify-center w-10 h-10 rounded-full border bg-black/60 backdrop-blur-md shadow shrink-0 z-10 ${accentColor === "cyan" ? "border-cyan-400 text-cyan-400" : "border-amber-400 text-amber-400"
+                                    }`}>
+                                    <Clock className="w-4 h-4" />
+                                </div>
+                                <div className="flex-1 p-4 rounded-xl border border-white/10 bg-black/30 backdrop-blur shadow-md">
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <div className={`font-mono text-xs font-bold uppercase tracking-wider ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"
+                                            }`}>
+                                            {event.timeframe}
+                                        </div>
+                                    </div>
+                                    <div className="text-sm text-foreground/90 font-medium mb-2">{event.event_description}</div>
+                                    <div className="text-xs italic text-muted-foreground bg-black/40 p-2.5 rounded-lg border-l-2 border-white/30 font-mono">
+                                        "{event.source_quote}"
                                     </div>
                                 </div>
-                                <div className="text-sm text-foreground/90 font-medium mb-2">{event.event_description}</div>
-                                <div className="text-xs italic text-muted-foreground bg-black/40 p-2.5 rounded-lg border-l-2 border-white/30 font-mono">
-                                    "{event.source_quote}"
-                                </div>
                             </div>
-                        </div>
-                    ))}
-                    {timeline.events.length === 0 && (
-                        <p className="text-muted-foreground text-center py-6 text-sm">No chronological events extracted.</p>
-                    )}
-                </div>
-            </CardContent>
-        </Card>
-    )
+                        ))}
+                        {events.length === 0 && (
+                            <p className="text-muted-foreground text-center py-6 text-sm">No chronological events extracted.</p>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
+        )
+    }
 
     return (
         <div className="space-y-8 max-w-7xl mx-auto pb-12">
@@ -436,12 +476,12 @@ export default function TestimonyValidatorPage() {
                                     Comparative Cross-Examination
                                 </h2>
                                 <p className="text-muted-foreground text-sm">
-                                    Isolated {response.discrepancies.length} discrepancy anomalies across {response.client_timeline.events.length + response.accused_timeline.events.length} extracted chronological events.
+                                    Isolated {response.discrepancies?.length || 0} discrepancy anomalies across {((response.client_timeline?.events?.length || 0) + (response.accused_timeline?.events?.length || 0))} extracted chronological events.
                                 </p>
                             </div>
 
                             <div className="w-full md:w-64 h-28 relative z-10">
-                                <ThreeTimelineCanvas discrepancyCount={response.discrepancies.length} active={true} />
+                                <ThreeTimelineCanvas discrepancyCount={response.discrepancies?.length || 0} active={true} />
                             </div>
                         </div>
 
@@ -451,7 +491,7 @@ export default function TestimonyValidatorPage() {
                                 <AlertCircle className="w-6 h-6 text-red-400" /> Flagged Contradictions & Omissions
                             </h3>
 
-                            {response.discrepancies.length === 0 ? (
+                            {(!response.discrepancies || response.discrepancies.length === 0) ? (
                                 <Card className="glass-card py-16 text-center border-emerald-500/30">
                                     <div className="flex justify-center mb-4">
                                         <CheckCircle className="w-12 h-12 text-emerald-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
@@ -464,7 +504,9 @@ export default function TestimonyValidatorPage() {
                             ) : (
                                 <div className="grid gap-6">
                                     {response.discrepancies.map((disc, idx) => {
-                                        const isHigh = disc.severity.toLowerCase() === "high"
+                                        const isHigh = (disc.severity || "").toLowerCase() === "high"
+                                        const analysisText = disc.analysis || disc.reasoning || disc.explanation || "No detailed analytical breakdown provided."
+
                                         return (
                                             <motion.div
                                                 key={idx}
@@ -483,19 +525,19 @@ export default function TestimonyValidatorPage() {
                                                                     ? "text-red-400 border-red-500/30 bg-red-500/10"
                                                                     : "text-amber-400 border-amber-500/30 bg-amber-500/10"
                                                                     }`}>
-                                                                    {disc.type}
+                                                                    {disc.type || "Discrepancy"}
                                                                 </Badge>
                                                                 <Badge variant="secondary" className="text-xs font-mono bg-white/10">
-                                                                    {disc.timeframe}
+                                                                    {disc.timeframe || "Undated"}
                                                                 </Badge>
                                                             </div>
                                                             <Badge className={`text-xs font-mono uppercase font-bold ${isHigh ? "bg-red-500 text-white" : "bg-amber-500 text-black"
                                                                 }`}>
-                                                                {disc.severity} Impact
+                                                                {disc.severity || "MODERATE"} Impact
                                                             </Badge>
                                                         </div>
                                                         <div className="prose prose-invert max-w-none text-sm text-foreground/90 font-medium">
-                                                            <ReactMarkdown>{disc.analysis}</ReactMarkdown>
+                                                            <ReactMarkdown>{analysisText}</ReactMarkdown>
                                                         </div>
                                                     </CardHeader>
 
