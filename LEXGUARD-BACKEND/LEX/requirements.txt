@@ -1,17 +1,16 @@
-scikit-learn
 fastapi
 uvicorn
+python-multipart
+python-dotenv
 pydantic
+torch
 transformers
+sentence-transformers
+scikit-learn
+pymupdf
+pyjwt
 langchain-groq
 langchain-core
-PyMuPDF
-python-dotenv
-pyjwt
-motor
-torch
-accelerate  # Optional, usually needed for transformers on some setups
-sentence-transformers
-python-multipart
 sse-starlette
+protobuf
 tf-keras
