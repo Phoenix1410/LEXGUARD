@@ -10,7 +10,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Security, De
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from transformers import (
     pipeline,
     AutoTokenizer,
@@ -34,7 +34,7 @@ import sys
 import io
 from typing import Optional, List, Dict, Any
 
-# Ensure UTF-8 stdout on Windows / Container environments
+# Ensure UTF-8 stdout
 if sys.stdout and hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 if sys.stderr and hasattr(sys.stderr, 'buffer'):
@@ -43,6 +43,22 @@ if sys.stderr and hasattr(sys.stderr, 'buffer'):
 # 2. Setup App & Configuration
 load_dotenv()
 app = FastAPI(title="LexGuard AI Core")
+
+# Pydantic Schemas for Structured Groq Execution
+class FactualQuery(BaseModel):
+    id: int = Field(description="Sequential query ID (0, 1, 2...)")
+    question: str = Field(description="Sharp, single-subject factual question (e.g., location, time, companion, action)")
+    party_a_fact: str = Field(description="Exact verbatim sentence from Party A answering this question")
+
+class FactualQueryList(BaseModel):
+    queries: List[FactualQuery] = Field(description="List of 4 to 6 focused factual questions")
+
+class PartyBResponse(BaseModel):
+    id: int = Field(description="Matching query ID")
+    answer: str = Field(description="Party B's version of events or 'Not mentioned.' if not addressed")
+
+class PartyBResponseList(BaseModel):
+    answers: List[PartyBResponse] = Field(description="List of answers corresponding to each query ID")
 
 # Safe database & model import with fallback
 try:
@@ -74,7 +90,6 @@ CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 security = HTTPBearer()
 
 def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    """Decodes and optionally verifies Clerk Token signatures."""
     token = credentials.credentials
     if not token or token in ("demo", "test", "null", "undefined", "dev", "mock_token"):
         return "demo_user"
@@ -101,7 +116,7 @@ def verify_clerk_token(credentials: HTTPAuthorizationCredentials = Security(secu
 device_id = 0 if torch.cuda.is_available() else -1
 device_name = "GPU (CUDA)" if device_id == 0 else "CPU"
 
-# 1. THE SNIPER (DistilRoBERTa - Contract Risk Detection)
+# 1. THE SNIPER (DistilRoBERTa)
 print(f"Loading Sniper Model from: {ABS_MODEL_PATH}")
 try:
     sniper_model = AutoModelForSequenceClassification.from_pretrained(ABS_MODEL_PATH, local_files_only=True)
@@ -113,7 +128,7 @@ except Exception as e:
     sniper = None
     sniper_tokenizer = None
 
-# 2. THE SCOUT (Sentence-BERT - Semantic Search)
+# 2. THE SCOUT (Sentence-BERT)
 print("Loading Scout Model (Semantic Search)...")
 try:
     scout_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -123,31 +138,7 @@ except Exception as e:
     print(f"[WARNING] Scout Model load warning: {e}")
     scout = None
 
-# 3. THE SENTINEL (Cross-Encoder NLI)
-print("Loading Sentinel Model (Local NLI Triage)...")
-try:
-    nli_device = "cuda" if torch.cuda.is_available() else "cpu"
-    nli_classifier = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=nli_device)
-    print(f"[OK] Sentinel NLI Model Loaded ({nli_device.upper()})")
-except Exception as e:
-    print(f"[WARNING] Sentinel NLI load warning: {e}")
-    nli_classifier = None
-
-# 4. THE INTERROGATOR (Local T5 Question Generator - Fallback)
-print("Loading Interrogator Model (Local T5-SQuAD Fallback)...")
-try:
-    qg_device = "cuda" if torch.cuda.is_available() else "cpu"
-    # valhalla/t5-small-qg-prepend is a true question generator (~240MB)
-    qg_tokenizer = T5Tokenizer.from_pretrained("valhalla/t5-small-qg-prepend", local_files_only=False)
-    qg_model = T5ForConditionalGeneration.from_pretrained("valhalla/t5-small-qg-prepend", local_files_only=False)
-    qg_model.to(qg_device)
-    print(f"[OK] Interrogator T5 Fallback Model Loaded ({qg_device.upper()})")
-except Exception as e:
-    print(f"[WARNING] Interrogator T5 Fallback load notice: {e}")
-    qg_tokenizer = None
-    qg_model = None
-
-# 5. THE ANALYST (Groq Reasoning Engine)
+# 3. THE ANALYST (Groq Reasoning Engine)
 if not GROQ_API_KEY:
     print("[WARNING] GROQ_API_KEY not found in environment.")
 
@@ -162,7 +153,6 @@ print(f"[OK] Analyst Model Loaded: {DEFAULT_MODEL}")
 # --- HELPER FUNCTIONS ---
 
 def extract_text_from_pdf(file_bytes: bytes) -> list[str]:
-    """Parses PDF bytes into structured legal clause chunks."""
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     text_chunks = []
     
@@ -172,7 +162,6 @@ def extract_text_from_pdf(file_bytes: bytes) -> list[str]:
             raw_text = b[4].strip()
             if not raw_text:
                 continue
-                
             clean_text = " ".join(raw_text.split()).strip()
             if len(clean_text) <= 20:
                 continue
@@ -205,7 +194,6 @@ async def process_analyst_evaluation(
     pred_score: float, 
     risk_type: str
 ):
-    """Evaluates single document contract risks asynchronously."""
     system_msg = f"""You are an elite legal auditor.
 Detection Reason: {source_str}
 User's Constraint Rule: {user_rule if user_rule else "None"}
@@ -240,149 +228,83 @@ Task:
         "source": source_str
     }
 
-# --- DYNAMIC QUESTION GENERATION (PRIMARY: GROQ | FALLBACK: LOCAL T5) ---
+# --- STRUCTURED DYNAMIC QUESTION GENERATION & PARTY B INTERROGATION ---
 
 async def generate_dynamic_questions_groq(text: str, max_items: int = 6) -> list[dict]:
     """
-    PRIMARY TRACK: Uses Groq to generate tight, single-subject factual questions.
-    Returns: [{"id": 0, "question": "...", "party_a_fact": "..."}, ...]
+    Extracts sharp, single-subject factual questions using Groq Structured Output.
+    Bypasses raw regex and json.loads completely.
     """
-    system_prompt = """You are a senior forensic legal cross-examiner.
-Analyze Party A's testimony and isolate 4 to 6 concrete, single-subject factual assertions.
+    structured_analyst = analyst.with_structured_output(FactualQueryList)
 
-STRICT RULES:
-1. Keep questions strictly single-subject (e.g., exact date/time, specific location, named companion/person, specific dollar amount or physical transaction).
-2. NEVER ask broad, vague, or summary questions (e.g., do NOT ask "What is the accusation?", "What happened next?", or "Can you summarize?").
-3. For each question, extract the EXACT verbatim sentence from Party A's text that provides the answer as 'party_a_fact'.
-4. Respond ONLY with a valid JSON array of objects:
-[
-  {
-    "id": 0,
-    "question": "What specific time did Party A arrive at the grocery store?",
-    "party_a_fact": "On Tuesday at 5:15 PM, I drove to the grocery store on Main Street."
-  }
-]"""
+    system_prompt = """You are a senior forensic legal interrogator.
+Analyze Party A's testimony. Extract 4 to 6 specific, single-subject factual assertions.
+
+STRICT CRITERIA:
+1. Questions MUST focus on single, atomic facts (e.g., exact time/date, specific location, named companion, specific item or physical action).
+2. NEVER ask broad or summary questions (e.g., do NOT ask "What happened?", "What is the accusation?", "Can you describe the event?").
+3. For each question, extract the EXACT verbatim sentence from Party A's testimony that answers it as 'party_a_fact'.
+4. Ensure 'id' is a sequential integer (0, 1, 2...)."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", "PARTY A TESTIMONY:\n{text}")
     ])
 
-    chain = prompt | analyst
-    response = await chain.ainvoke({"text": text})
-    raw_content = response.content.strip()
+    chain = prompt | structured_analyst
+    result: FactualQueryList = await chain.ainvoke({"text": text})
 
-    json_match = re.search(r"\[.*\]", raw_content, re.DOTALL)
-    if json_match:
-        items = json.loads(json_match.group(0))
-        valid_items = []
-        for idx, item in enumerate(items[:max_items]):
-            if "question" in item and "party_a_fact" in item:
-                valid_items.append({
-                    "id": idx,
-                    "question": str(item["question"]).strip(),
-                    "party_a_fact": str(item["party_a_fact"]).strip()
-                })
-        if valid_items:
-            return valid_items
-            
-    raise ValueError("Groq returned invalid JSON array for questions.")
-
-def generate_dynamic_questions_local_t5(text: str, max_items: int = 5) -> list[dict]:
-    """
-    FALLBACK TRACK: Runs locally on CPU if Groq is rate-limited or fails.
-    Uses valhalla/t5-small-qg-prepend to generate factual questions from individual sentences.
-    """
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 35]
     factual_pairs = []
-    
-    if qg_model and qg_tokenizer:
-        for idx, sentence in enumerate(sentences[:max_items]):
-            try:
-                # SQuAD QG format: "context: <sentence>"
-                input_text = f"context: {sentence}"
-                input_ids = qg_tokenizer.encode(input_text, return_tensors='pt').to(qg_model.device)
-                outputs = qg_model.generate(
-                    input_ids=input_ids,
-                    max_length=48,
-                    num_beams=2,
-                    early_stopping=True
-                )
-                generated_q = qg_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-                if "?" in generated_q and len(generated_q.split()) > 3:
-                    factual_pairs.append({
-                        "id": len(factual_pairs),
-                        "question": generated_q.capitalize(),
-                        "party_a_fact": sentence
-                    })
-            except Exception as e:
-                print(f"[LOCAL QG WARNING] Failed on sentence: {e}")
-
-    # Fallback to dynamic sentence grounding if T5 fails
-    if not factual_pairs:
-        for idx, sentence in enumerate(sentences[:max_items]):
-            factual_pairs.append({
-                "id": idx,
-                "question": f"Regarding: '{sentence[:60]}...' — what does Party B state?",
-                "party_a_fact": sentence
-            })
-
+    for item in result.queries[:max_items]:
+        factual_pairs.append({
+            "id": item.id,
+            "question": item.question.strip(),
+            "party_a_fact": item.party_a_fact.strip()
+        })
     return factual_pairs
 
 async def extract_party_b_answers(factual_pairs: list[dict], party_b_text: str) -> dict[int, str]:
     """
-    Queries Party B on the exact questions using integer indexing to avoid key mismatches.
+    Queries Party B on the exact questions using Groq Structured Output.
+    Guarantees typed integer ID mapping.
     """
+    structured_analyst = analyst.with_structured_output(PartyBResponseList)
+
     queries_formatted = "\n".join([
         f'Query {item["id"]}: "{item["question"]}"'
         for item in factual_pairs
     ])
 
     system_prompt = """You are an objective forensic legal cross-examiner.
-Examine Party B's testimony against each of the numbered queries.
+Examine Party B's testimony against each of the provided numbered queries.
 
-STRICT RULES:
-1. If Party B states facts addressing the query (even if they contradict or give a different version), state Party B's version concisely.
-2. If Party B's statement does NOT address or mention the subject matter at all, output exactly: "Not mentioned."
-3. Respond ONLY with a valid JSON array of objects:
-[
-  {"id": 0, "answer": "Party B's statement or Not mentioned."},
-  {"id": 1, "answer": "..."}
-]"""
+RULES:
+1. If Party B mentions facts addressing the query (even if they contradict or give a different version), state Party B's version concisely.
+2. If Party B's statement does NOT address or mention the subject matter of that query, output exactly: "Not mentioned."
+3. Every Query ID provided MUST be answered in the output list."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", "NUMBERED QUERIES:\n{queries}\n\nPARTY B TESTIMONY:\n{testimony}")
     ])
-    
-    chain = prompt | analyst
-    
-    try:
-        response = await chain.ainvoke({
-            "queries": queries_formatted,
-            "testimony": party_b_text
-        })
-        
-        raw = response.content.strip()
-        json_match = re.search(r"\[.*\]", raw, re.DOTALL)
-        
-        results_map = {}
-        if json_match:
-            parsed_array = json.loads(json_match.group(0))
-            for entry in parsed_array:
-                if "id" in entry and "answer" in entry:
-                    results_map[int(entry["id"])] = str(entry["answer"]).strip()
-                    
-        for item in factual_pairs:
-            idx = item["id"]
-            if idx not in results_map:
-                results_map[idx] = "Not mentioned."
-                
-        return results_map
 
-    except Exception as e:
-        print(f"[ERROR] Groq extraction for Party B failed: {e}")
-        return {item["id"]: "Not mentioned." for item in factual_pairs}
+    chain = prompt | structured_analyst
+    result: PartyBResponseList = await chain.ainvoke({
+        "queries": queries_formatted,
+        "testimony": party_b_text
+    })
+
+    results_map = {}
+    for item in result.answers:
+        results_map[item.id] = item.answer.strip()
+
+    # Fallback any unaddressed IDs to "Not mentioned."
+    for item in factual_pairs:
+        idx = item["id"]
+        if idx not in results_map:
+            results_map[idx] = "Not mentioned."
+
+    return results_map
 
 # --- API ENDPOINTS ---
 
@@ -390,12 +312,11 @@ STRICT RULES:
 def health_check():
     return {
         "status": "LexGuard Brain is Online 🧠",
-        "models": ["Sniper", "Scout", "Sentinel (NLI)", "Interrogator (T5 Fallback)", "Analyst"]
+        "models": ["Sniper", "Scout", "Analyst (Structured Engine)"]
     }
 
 @app.post("/users/sync")
 async def sync_user(user_data: UserSync):
-    """Saves or updates user profiles from Clerk sign-in/sync."""
     try:
         await db.users.update_one(
             {"clerk_id": user_data.clerk_id},
@@ -417,7 +338,6 @@ async def analyze_document(
     user_rule: str = Form(None),
     user_id: str = Depends(verify_clerk_token)
 ):
-    """Scans contracts using Sniper (DistilRoBERTa), Scout (Sentence-BERT), and Analyst."""
     print(f"[UPLOADING] User {user_id} uploading: {file.filename}")
     
     try:
@@ -436,13 +356,11 @@ async def analyze_document(
 
     label_map = {"LABEL_0": "Safe", "LABEL_1": "Termination", "LABEL_2": "Non-Compete"}
     
-    # Run Sniper Classification
     if sniper and sniper_tokenizer:
         sniper_preds = sniper(clauses, batch_size=8, truncation=True)
     else:
         sniper_preds = [{'label': 'LABEL_0', 'score': 1.0} for _ in clauses]
 
-    # Run Scout Search
     semantic_matches = set()
     if scout and user_rule and len(user_rule.strip()) > 5:
         rule_vec = scout.encode([user_rule])
@@ -453,7 +371,6 @@ async def analyze_document(
             if sim_scores[idx] > 0.30:
                 semantic_matches.add(int(idx))
 
-    # Aggregate and analyze risks with Groq concurrently
     analysis_tasks = []
     for i, (clause, pred) in enumerate(zip(clauses, sniper_preds)):
         label_str = pred['label']
@@ -501,10 +418,7 @@ async def stream_compare_testimonies(
 ):
     """
     Symmetric Streaming Testimony Validator (SSE).
-    1. Primary: Groq dynamically isolates single-subject questions and pairs with Party A's facts.
-    2. Fallback: Local T5 takes over automatically if Groq is rate-limited or unavailable.
-    3. Cross-examines Party B on identical questions using integer indexes.
-    4. Yields real-time events to animate the frontend flashing cards.
+    Uses Groq Native Structured Output (Pydantic) for 100% reliable schema parsing.
     """
     async def resolve_input(file: UploadFile, text: str) -> str:
         if file and file.filename:
@@ -523,33 +437,36 @@ async def stream_compare_testimonies(
     async def event_generator():
         try:
             # 1. Initialization
-            yield f"data: {json.dumps({'status': 'initializing', 'msg': 'Extracting dynamic factual assertions from Party A...'})}\n\n"
+            yield f"data: {json.dumps({'status': 'initializing', 'msg': 'Isolating concrete factual anchors from Party A...'})}\n\n"
             await asyncio.sleep(0.3)
 
-            # 2. Extract Questions (Primary Groq -> Fallback Local T5)
+            # 2. Extract Questions using Structured Output
             try:
                 factual_pairs = await generate_dynamic_questions_groq(c_content, max_items=6)
-                mode_label = "Groq LPU"
-            except Exception as qg_err:
-                print(f"[NOTICE] Groq QG bypassed/failed ({qg_err}). Engaging Local T5 Fallback...")
-                factual_pairs = generate_dynamic_questions_local_t5(c_content, max_items=5)
-                mode_label = "Local T5 Engine"
+            except Exception as e:
+                print(f"[FATAL QG ERROR] {e}")
+                yield f"data: {json.dumps({'status': 'error', 'msg': f'Question generation failed: {str(e)}'})}\n\n"
+                return
 
-            yield f"data: {json.dumps({'status': 'questions_ready', 'msg': f'Isolated {len(factual_pairs)} focused factual queries ({mode_label}).'})}\n\n"
+            yield f"data: {json.dumps({'status': 'questions_ready', 'msg': f'Isolated {len(factual_pairs)} focused factual queries.'})}\n\n"
             await asyncio.sleep(0.3)
 
-            # 3. Query Party B on the exact questions
+            # 3. Query Party B using Structured Output
             yield f"data: {json.dumps({'status': 'querying', 'msg': 'Cross-examining Party B on identical factual queries...'})}\n\n"
-            party_b_answers = await extract_party_b_answers(factual_pairs, a_content)
+            try:
+                party_b_answers = await extract_party_b_answers(factual_pairs, a_content)
+            except Exception as e:
+                print(f"[FATAL PARTY B ERROR] {e}")
+                yield f"data: {json.dumps({'status': 'error', 'msg': f'Party B extraction failed: {str(e)}'})}\n\n"
+                return
 
             # 4. Stream Matrix Results Row-by-Row
             for item in factual_pairs:
                 q_id = item["id"]
                 question = item["question"]
-                ans_a = item["party_a_fact"]  # Preserved verbatim statement from Party A
+                ans_a = item["party_a_fact"]
                 ans_b = party_b_answers.get(q_id, "Not mentioned.")
 
-                # Objective classification
                 is_omission = "not mentioned" in ans_b.lower()
                 
                 if ans_a.strip().lower() == ans_b.strip().lower():
@@ -568,7 +485,6 @@ async def stream_compare_testimonies(
                 }
                 
                 yield f"data: {json.dumps(payload)}\n\n"
-                # Hold window for the frontend to animate and display
                 await asyncio.sleep(2.0)
                 
             # 5. Complete Stream

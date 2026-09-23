@@ -6,9 +6,12 @@ pydantic
 torch
 transformers
 sentence-transformers
+sentencepiece
 scikit-learn
 pymupdf
 pyjwt
+cryptography
+motor
 langchain-groq
 langchain-core
 sse-starlette
