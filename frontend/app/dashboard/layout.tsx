@@ -31,7 +31,7 @@ export default function DashboardLayout({
         <div className="min-h-screen flex bg-background overflow-hidden selection:bg-primary/30">
             {/* Sidebar with Glassmorphism */}
             <aside className="w-64 border-r border-white/10 bg-black/20 backdrop-blur-xl hidden md:flex flex-col fixed inset-y-0 z-30 shadow-2xl">
-                <div className="p-6 border-b border-white/10 flex items-center gap-2 font-bold text-xl text-white">
+                <div className="p-6 border-b border-white/10 flex items-center gap-2 font-bold text-xl text-black dark:text-white">
                     <ShieldCheck className="w-6 h-6 text-primary drop-shadow-[0_0_15px_rgba(0,100,255,0.5)]" />
                     <span className="tracking-wide">JURIDIX</span>
                 </div>
@@ -46,8 +46,8 @@ export default function DashboardLayout({
                                 className={cn(
                                     "flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-300 hover-pop",
                                     isActive
-                                        ? "bg-primary/20 text-white shadow-[0_0_20px_rgba(0,100,255,0.3)] border border-primary/30"
-                                        : "text-muted-foreground hover:bg-white/5 hover:text-white hover:pl-4"
+                                        ? "bg-primary/20 text-black dark:text-white shadow-[0_0_20px_rgba(0,100,255,0.3)] border border-primary/30"
+                                        : "text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white hover:pl-4"
                                 )}
                             >
                                 <Icon className="w-4 h-4" />

@@ -151,7 +151,7 @@
   }
 
   .metallic-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-300 via-blue-100 to-blue-300;
+    @apply text-black dark:text-transparent dark:bg-clip-text dark:bg-gradient-to-r dark:from-blue-300 dark:via-blue-100 dark:to-blue-300;
   }
 
   /* Interactive Cursor Effects */

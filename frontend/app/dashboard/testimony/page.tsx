@@ -218,7 +218,7 @@ export default function TestimonyValidatorPage() {
                         </Badge>
                         <span className="text-xs text-muted-foreground font-mono">Local QG + Dual-Track Groq QA</span>
                     </div>
-                    <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-amber-300 bg-clip-text text-transparent">
+                    <h1 className="text-3xl font-extrabold tracking-tight text-black dark:text-transparent dark:bg-clip-text dark:bg-gradient-to-r dark:from-white dark:via-slate-100 dark:to-amber-300">
                         Testimony Validator
                     </h1>
                     <p className="text-muted-foreground text-sm mt-1">
@@ -410,7 +410,7 @@ export default function TestimonyValidatorPage() {
                                             <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground block mb-1">
                                                 Evaluating Interrogation Query
                                             </span>
-                                            <h3 className="text-lg font-bold text-white tracking-tight">
+                                            <h3 className="text-lg font-bold text-black dark:text-white tracking-tight">
                                                 "{currentPair.question}"
                                             </h3>
                                         </div>
@@ -459,7 +459,7 @@ export default function TestimonyValidatorPage() {
                                     <CheckCircle className="w-3.5 h-3.5 mr-1" /> Examination Complete
                                 </Badge>
                             </div>
-                            <h2 className="text-2xl font-extrabold tracking-tight text-white">
+                            <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
                                 Factual Alignment Matrix
                             </h2>
                             <p className="text-muted-foreground text-sm">
@@ -470,7 +470,7 @@ export default function TestimonyValidatorPage() {
 
                     {/* Results Grid */}
                     <div className="space-y-4">
-                        <h3 className="text-xl font-bold flex items-center gap-2 text-white">
+                        <h3 className="text-xl font-bold flex items-center gap-2 text-black dark:text-white">
                             <Layers className="w-5 h-5 text-cyan-400" /> Factual Discrepancy Breakdown
                         </h3>
 
@@ -492,7 +492,7 @@ export default function TestimonyValidatorPage() {
                                     >
                                         <CardHeader className="pb-2">
                                             <div className="flex items-center justify-between">
-                                                <CardTitle className="text-base font-bold text-white">
+                                                <CardTitle className="text-base font-bold text-black dark:text-white">
                                                     {item.question}
                                                 </CardTitle>
                                                 <Badge variant="outline" className={`font-mono text-xs ${

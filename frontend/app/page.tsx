@@ -25,14 +25,14 @@ export default function Home() {
           <div className="w-10 h-10 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.4)]">
             <ShieldCheck className="w-6 h-6 text-primary drop-shadow-[0_0_10px_rgba(56,189,248,0.8)]" />
           </div>
-          <span className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-transparent">
+          <span className="text-black dark:text-transparent dark:bg-clip-text dark:bg-gradient-to-r dark:from-white dark:via-cyan-100 dark:to-blue-300">
             JURIDIX
           </span>
         </div>
         <div className="flex items-center gap-4">
           <Link
             href="/login"
-            className="text-sm font-semibold text-muted-foreground hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+            className="text-sm font-semibold text-muted-foreground hover:text-black dark:hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
           >
             Sign In
           </Link>
@@ -102,7 +102,7 @@ export default function Home() {
                     <FileText className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-base text-white">Live Forensic Pipeline Active</h3>
+                    <h3 className="font-bold text-base text-black dark:text-white">Live Forensic Pipeline Active</h3>
                     <p className="text-xs font-mono text-cyan-400">Sniper + Scout + Analyst</p>
                   </div>
                 </div>

@@ -143,7 +143,7 @@ export default function UsePage() {
                         </Badge>
                         <span className="text-xs text-muted-foreground font-mono">v2.4 Core Active</span>
                     </div>
-                    <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-cyan-300 bg-clip-text text-transparent">
+                    <h1 className="text-3xl font-extrabold tracking-tight text-black dark:text-transparent dark:bg-clip-text dark:bg-gradient-to-r dark:from-white dark:via-slate-100 dark:to-cyan-300">
                         AI Contract Analysis
                     </h1>
                     <p className="text-muted-foreground text-sm mt-1">
