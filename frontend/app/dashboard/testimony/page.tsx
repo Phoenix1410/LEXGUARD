@@ -1,14 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useUser, useAuth } from "@clerk/nextjs"
-import axios from "axios"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { Label } from "@/components/ui/label"
 import { 
     AlertCircle, 
     CheckCircle, 
@@ -18,56 +16,41 @@ import {
     Sparkles, 
     ShieldCheck, 
     Scale, 
-    History, 
-    Clock, 
-    FileEdit, 
-    Zap, 
-    ArrowRight, 
-    RefreshCw 
+    RefreshCw,
+    Activity,
+    Layers,
+    ArrowRight,
+    FileEdit
 } from "lucide-react"
-import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from "framer-motion"
 import ThreeTimelineCanvas from "@/components/three/ThreeTimelineCanvas"
 import { getApiUrl } from "@/lib/api-config"
 
-interface TimelineEvent {
-    timeframe: string
-    event_description: string
-    source_quote: string
-}
-
-interface Timeline {
-    party: string
-    events: TimelineEvent[]
-}
-
-interface Discrepancy {
-    type: string
-    timeframe: string
-    client_version?: string
-    accused_version?: string
-    analysis?: string
-    reasoning?: string
-    explanation?: string
-    severity?: string
-}
-
-interface ComparativeAnalysisResult {
-    client_timeline: Timeline
-    accused_timeline: Timeline
-    discrepancies: Discrepancy[]
+interface StreamItem {
+    question: string
+    client_answer: string
+    accused_answer: string
+    match_status: "Accounts Align" | "Incomplete Event" | "Event details do not align"
 }
 
 export default function TestimonyValidatorPage() {
     const { getToken } = useAuth()
+    const router = useRouter()
+    const { isSignedIn, isLoaded } = useUser()
+
+    // Inputs
     const [clientFile, setClientFile] = useState<File | null>(null)
     const [accusedFile, setAccusedFile] = useState<File | null>(null)
     const [clientText, setClientText] = useState("")
     const [accusedText, setAccusedText] = useState("")
     const [inputMode, setInputMode] = useState<"file" | "text">("file")
 
-    const [loading, setLoading] = useState(false)
-    const [response, setResponse] = useState<ComparativeAnalysisResult | null>(null)
+    // Streaming & State Management
+    const [isStreaming, setIsStreaming] = useState(false)
+    const [streamStatus, setStreamStatus] = useState("")
+    const [currentPair, setCurrentPair] = useState<StreamItem | null>(null)
+    const [finalResults, setFinalResults] = useState<StreamItem[]>([])
+    const [isComplete, setIsComplete] = useState(false)
     const [error, setError] = useState("")
 
     const handleClientFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -84,6 +67,15 @@ export default function TestimonyValidatorPage() {
         }
     }
 
+    const resetState = () => {
+        setIsStreaming(false)
+        setIsComplete(false)
+        setCurrentPair(null)
+        setFinalResults([])
+        setStreamStatus("")
+        setError("")
+    }
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
 
@@ -91,13 +83,13 @@ export default function TestimonyValidatorPage() {
         const hasAccused = accusedFile || accusedText.trim()
 
         if (!hasClient || !hasAccused) {
-            setError("Please provide testimony (PDF upload or text) for both the Client and the Accused.")
+            setError("Please provide testimony (PDF upload or text) for both parties.")
             return
         }
 
-        setLoading(true)
-        setError("")
-        setResponse(null)
+        resetState()
+        setIsStreaming(true)
+        setStreamStatus("Initializing local interrogator...")
 
         const formData = new FormData()
         if (clientFile) formData.append("client_file", clientFile)
@@ -107,45 +99,79 @@ export default function TestimonyValidatorPage() {
 
         try {
             const token = await getToken()
-            
-            // Safe URL resolution avoiding double-path bugs
-            const resolvedUrl = getApiUrl('/compare_testimonies')
-            const targetEndpoint = resolvedUrl.endsWith('/compare_testimonies')
+            const resolvedUrl = getApiUrl('/stream_compare_testimonies')
+            const targetEndpoint = resolvedUrl.endsWith('/stream_compare_testimonies')
                 ? resolvedUrl
-                : `${resolvedUrl.replace(/\/$/, '')}/compare_testimonies`
+                : `${resolvedUrl.replace(/\/$/, '')}/stream_compare_testimonies`
 
-            const res = await axios.post<ComparativeAnalysisResult>(targetEndpoint, formData, {
+            // Stream response consumer via Fetch & Streams API
+            const response = await fetch(targetEndpoint, {
+                method: "POST",
                 headers: {
-                    "Content-Type": "multipart/form-data",
                     Authorization: `Bearer ${token || "demo_token"}`,
+                    // Note: Do not set Content-Type header; fetch auto-sets boundary for FormData
                 },
+                body: formData,
             })
-            setResponse(res.data)
-        } catch (err: any) {
-            console.error("[Testimony Validation Error]", err)
-            
-            // Defend against FastAPI 422 array objects or malformed errors
-            let msg = "Failed to validate testimonies. Ensure backend is running."
-            if (err?.response?.data?.detail) {
-                const detail = err.response.data.detail
-                if (typeof detail === "string") {
-                    msg = detail
-                } else if (Array.isArray(detail)) {
-                    msg = detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
-                } else {
-                    msg = JSON.stringify(detail)
-                }
-            } else if (err?.message) {
-                msg = err.message
+
+            if (!response.ok) {
+                throw new Error(`Server returned HTTP ${response.status}`)
             }
-            setError(msg)
-        } finally {
-            setLoading(false)
+
+            if (!response.body) {
+                throw new Error("No readable stream available.")
+            }
+
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder("utf-8")
+            let buffer = ""
+            const accumulatedResults: StreamItem[] = []
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const blocks = buffer.split("\n\n")
+                buffer = blocks.pop() || "" // Keep incomplete remainder in buffer
+
+                for (const block of blocks) {
+                    const line = block.trim()
+                    if (!line.startsWith("data:")) continue
+
+                    try {
+                        const jsonStr = line.replace(/^data:\s*/, "").trim()
+                        const payload = JSON.parse(jsonStr)
+
+                        if (payload.status === "initializing" || payload.status === "questions_ready" || payload.status === "querying") {
+                            setStreamStatus(payload.msg)
+                        } else if (payload.status === "flashing_pair") {
+                            const item: StreamItem = {
+                                question: payload.question,
+                                client_answer: payload.client_answer,
+                                accused_answer: payload.accused_answer,
+                                match_status: payload.match_status,
+                            }
+                            setCurrentPair(item)
+                            accumulatedResults.push(item)
+                        } else if (payload.status === "done") {
+                            setIsComplete(true)
+                            setFinalResults(accumulatedResults)
+                            setIsStreaming(false)
+                        } else if (payload.status === "error") {
+                            throw new Error(payload.msg)
+                        }
+                    } catch (err: any) {
+                        console.warn("[Stream parser warning]", err)
+                    }
+                }
+            }
+        } catch (err: any) {
+            console.error("[Stream Error]", err)
+            setError(err.message || "Failed to stream testimony validation.")
+            setIsStreaming(false)
         }
     }
-
-    const router = useRouter()
-    const { isSignedIn, isLoaded } = useUser()
 
     if (!isLoaded) {
         return (
@@ -161,429 +187,344 @@ export default function TestimonyValidatorPage() {
     if (!isSignedIn) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[65vh] text-center space-y-6">
-                <motion.div
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.5 }}
-                >
-                    <Card className="glass-card max-w-md mx-auto p-6 hover-pop border-primary/30 relative overflow-hidden shadow-2xl">
-                        <div className="absolute -top-12 -right-12 w-32 h-32 bg-primary/20 rounded-full blur-3xl" />
-                        <CardHeader>
-                            <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-primary/30 to-cyan-500/20 flex items-center justify-center mb-4 border border-primary/40 shadow-inner">
-                                <ShieldCheck className="w-8 h-8 text-primary drop-shadow-[0_0_12px_rgba(56,189,248,0.8)]" />
-                            </div>
-                            <CardTitle className="text-2xl font-bold tracking-tight">Authentication Required</CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                You must be logged in to access the Forensic Testimony Validator.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardFooter className="justify-center">
-                            <Button size="lg" className="w-full shadow-lg shadow-primary/25 font-semibold" onClick={() => router.push("/login")}>
-                                Sign In to Continue <ArrowRight className="ml-2 w-4 h-4" />
-                            </Button>
-                        </CardFooter>
-                    </Card>
-                </motion.div>
+                <Card className="glass-card max-w-md mx-auto p-6 border-primary/30 relative overflow-hidden shadow-2xl">
+                    <CardHeader>
+                        <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-primary/30 to-cyan-500/20 flex items-center justify-center mb-4 border border-primary/40 shadow-inner">
+                            <ShieldCheck className="w-8 h-8 text-primary drop-shadow-[0_0_12px_rgba(56,189,248,0.8)]" />
+                        </div>
+                        <CardTitle className="text-2xl font-bold tracking-tight">Authentication Required</CardTitle>
+                        <CardDescription className="text-muted-foreground">
+                            You must be logged in to access the Forensic Testimony Validator.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardFooter className="justify-center">
+                        <Button size="lg" className="w-full shadow-lg shadow-primary/25 font-semibold" onClick={() => router.push("/login")}>
+                            Sign In to Continue <ArrowRight className="ml-2 w-4 h-4" />
+                        </Button>
+                    </CardFooter>
+                </Card>
             </div>
-        )
-    }
-
-    const TimelineView = ({ timeline, accentColor }: { timeline?: Timeline; accentColor: "cyan" | "amber" }) => {
-        const events = timeline?.events || []
-        const partyName = timeline?.party || "Party"
-
-        return (
-            <Card className={`glass-card hover-pop h-full border ${accentColor === "cyan" ? "border-cyan-500/30" : "border-amber-500/30"}`}>
-                <CardHeader className="pb-4 border-b border-white/5">
-                    <div className="flex items-center justify-between">
-                        <CardTitle className="text-xl flex items-center gap-2">
-                            <History className={`w-5 h-5 ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"}`} />
-                            {partyName} Timeline
-                        </CardTitle>
-                        <Badge variant="outline" className={`text-xs font-mono ${accentColor === "cyan"
-                            ? "text-cyan-400 border-cyan-500/30 bg-cyan-500/10"
-                            : "text-amber-400 border-amber-500/30 bg-amber-500/10"
-                            }`}>
-                            {events.length} Events Logged
-                        </Badge>
-                    </div>
-                </CardHeader>
-                <CardContent className="pt-6">
-                    <div className="space-y-6 relative before:absolute before:inset-0 before:left-5 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/20 before:to-transparent">
-                        {events.map((event, idx) => (
-                            <div key={idx} className="relative flex items-start gap-4">
-                                <div className={`flex items-center justify-center w-10 h-10 rounded-full border bg-black/60 backdrop-blur-md shadow shrink-0 z-10 ${accentColor === "cyan" ? "border-cyan-400 text-cyan-400" : "border-amber-400 text-amber-400"
-                                    }`}>
-                                    <Clock className="w-4 h-4" />
-                                </div>
-                                <div className="flex-1 p-4 rounded-xl border border-white/10 bg-black/30 backdrop-blur shadow-md">
-                                    <div className="flex items-center justify-between mb-1.5">
-                                        <div className={`font-mono text-xs font-bold uppercase tracking-wider ${accentColor === "cyan" ? "text-cyan-400" : "text-amber-400"
-                                            }`}>
-                                            {event.timeframe}
-                                        </div>
-                                    </div>
-                                    <div className="text-sm text-foreground/90 font-medium mb-2">{event.event_description}</div>
-                                    <div className="text-xs italic text-muted-foreground bg-black/40 p-2.5 rounded-lg border-l-2 border-white/30 font-mono">
-                                        "{event.source_quote}"
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                        {events.length === 0 && (
-                            <p className="text-muted-foreground text-center py-6 text-sm">No chronological events extracted.</p>
-                        )}
-                    </div>
-                </CardContent>
-            </Card>
         )
     }
 
     return (
         <div className="space-y-8 max-w-7xl mx-auto pb-12">
-            {/* Header */}
+            {/* Top Navigation / Status */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-6">
                 <div>
                     <div className="flex items-center gap-2 mb-1">
                         <Badge variant="outline" className="text-xs bg-primary/10 border-primary/30 text-cyan-400">
-                            <Scale className="w-3 h-3 mr-1 text-cyan-400" /> Map-Reduce Forensic Engine
+                            <Scale className="w-3 h-3 mr-1 text-cyan-400" /> Objective Cross-Examination Engine
                         </Badge>
-                        <span className="text-xs text-muted-foreground font-mono">Dual-Transcript Cross-Examination</span>
+                        <span className="text-xs text-muted-foreground font-mono">Local QG + Dual-Track Groq QA</span>
                     </div>
                     <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-amber-300 bg-clip-text text-transparent">
                         Testimony Validator
                     </h1>
                     <p className="text-muted-foreground text-sm mt-1">
-                        Cross-examine Client and Accused testimony accounts to isolate direct contradictions, factual omissions, and timeline deviations.
+                        Interrogates parallel accounts on identical factual queries to isolate discrepancies without judicial bias.
                     </p>
                 </div>
 
-                {response && (
+                {(isComplete || isStreaming) && (
                     <Button
                         variant="outline"
-                        onClick={() => setResponse(null)}
+                        onClick={resetState}
                         className="glass border-primary/30 hover:bg-primary/20 transition-all text-sm font-medium gap-2"
                     >
-                        <RefreshCw className="w-4 h-4" /> New Comparison
+                        <RefreshCw className="w-4 h-4" /> New Examination
                     </Button>
                 )}
             </div>
 
-            <AnimatePresence mode="wait">
-                {!response && (
-                    <motion.div
-                        key="form"
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.98 }}
-                        transition={{ duration: 0.4 }}
-                        className="space-y-8"
-                    >
-                        {/* 3D Visual Stage Banner */}
-                        <div className="h-[220px] rounded-2xl glass-card border border-primary/20 relative overflow-hidden flex flex-col justify-between p-6 shadow-2xl">
-                            <div className="relative z-10 flex items-center justify-between">
-                                <span className="text-xs font-mono tracking-wider text-cyan-400 uppercase flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                                    3D Forensic Timeline Stream
-                                </span>
-                                <div className="flex items-center gap-4 text-xs font-mono">
-                                    <span className="flex items-center gap-1.5 text-cyan-400">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" /> Client Stream
-                                    </span>
-                                    <span className="flex items-center gap-1.5 text-amber-400">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Accused Stream
-                                    </span>
-                                    <span className="flex items-center gap-1.5 text-red-400">
-                                        <span className="w-2.5 h-2.5 rounded-full bg-red-400" /> Conflict Anomaly
-                                    </span>
-                                </div>
-                            </div>
+            {/* Stage 1: Input Form (Only visible when not streaming and not completed) */}
+            {!isStreaming && !isComplete && (
+                <div className="space-y-8">
+                    {/* 3D Visual Stage Banner */}
+                    <div className="h-[180px] rounded-2xl glass-card border border-primary/20 relative overflow-hidden flex flex-col justify-between p-6 shadow-2xl">
+                        <div className="relative z-10 flex items-center justify-between">
+                            <span className="text-xs font-mono tracking-wider text-cyan-400 uppercase flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                                Standby: Symmetric Fact Extraction
+                            </span>
+                        </div>
+                        <div className="absolute inset-0 z-0">
+                            <ThreeTimelineCanvas discrepancyCount={0} active={false} />
+                        </div>
+                    </div>
 
-                            {/* 3D Canvas */}
-                            <div className="absolute inset-0 z-0">
-                                <ThreeTimelineCanvas discrepancyCount={3} active={loading} />
-                            </div>
+                    {/* Mode Toggle */}
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant={inputMode === "file" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setInputMode("file")}
+                            className="text-xs font-mono"
+                        >
+                            <UploadCloud className="w-3.5 h-3.5 mr-1" /> PDF Upload
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={inputMode === "text" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setInputMode("text")}
+                            className="text-xs font-mono"
+                        >
+                            <FileEdit className="w-3.5 h-3.5 mr-1" /> Raw Transcript
+                        </Button>
+                    </div>
 
-                            <div className="relative z-10 flex justify-between items-center text-xs font-mono text-muted-foreground bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 w-fit">
-                                <span>Mode: Map-Reduce Chronological Alignment</span>
-                            </div>
+                    {/* Upload Forms */}
+                    <form onSubmit={handleSubmit} className="space-y-6">
+                        <div className="grid md:grid-cols-2 gap-6">
+                            {/* Party A / Client */}
+                            <Card className="glass-card border-l-4 border-l-cyan-500 shadow-xl">
+                                <CardHeader>
+                                    <div className="flex items-center justify-between">
+                                        <CardTitle className="text-lg flex items-center gap-2">
+                                            <FileText className="w-5 h-5 text-cyan-400" /> Party A Account (Client)
+                                        </CardTitle>
+                                        <Badge variant="outline" className="text-xs font-mono text-cyan-400 border-cyan-500/30">
+                                            Reference Statement
+                                        </Badge>
+                                    </div>
+                                    <CardDescription>
+                                        {inputMode === "file" ? "Upload first statement PDF" : "Paste statement text"}
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    {inputMode === "file" ? (
+                                        <div className="border-2 border-dashed border-cyan-500/30 hover:border-cyan-400/60 rounded-xl p-8 text-center bg-black/20 hover:bg-black/30 transition-all relative group cursor-pointer">
+                                            <input
+                                                type="file"
+                                                accept=".pdf"
+                                                onChange={handleClientFileChange}
+                                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                            />
+                                            <div className="flex flex-col items-center gap-2 pointer-events-none">
+                                                <div className="w-12 h-12 rounded-xl bg-cyan-500/15 flex items-center justify-center border border-cyan-500/30">
+                                                    <UploadCloud className="w-6 h-6 text-cyan-400" />
+                                                </div>
+                                                <p className="font-medium text-sm text-foreground">
+                                                    {clientFile ? clientFile.name : "Select Party A PDF"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <Textarea
+                                            placeholder="Paste Party A's deposition, dates, and narrative here..."
+                                            value={clientText}
+                                            onChange={(e) => setClientText(e.target.value)}
+                                            className="bg-black/30 border-white/15 min-h-[160px] text-xs font-mono"
+                                        />
+                                    )}
+                                </CardContent>
+                            </Card>
+
+                            {/* Party B / Accused */}
+                            <Card className="glass-card border-l-4 border-l-amber-500 shadow-xl">
+                                <CardHeader>
+                                    <div className="flex items-center justify-between">
+                                        <CardTitle className="text-lg flex items-center gap-2">
+                                            <FileText className="w-5 h-5 text-amber-400" /> Party B Account (Accused)
+                                        </CardTitle>
+                                        <Badge variant="outline" className="text-xs font-mono text-amber-400 border-amber-500/30">
+                                            Counter Statement
+                                        </Badge>
+                                    </div>
+                                    <CardDescription>
+                                        {inputMode === "file" ? "Upload counter statement PDF" : "Paste statement text"}
+                                    </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    {inputMode === "file" ? (
+                                        <div className="border-2 border-dashed border-amber-500/30 hover:border-amber-400/60 rounded-xl p-8 text-center bg-black/20 hover:bg-black/30 transition-all relative group cursor-pointer">
+                                            <input
+                                                type="file"
+                                                accept=".pdf"
+                                                onChange={handleAccusedFileChange}
+                                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                            />
+                                            <div className="flex flex-col items-center gap-2 pointer-events-none">
+                                                <div className="w-12 h-12 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/30">
+                                                    <UploadCloud className="w-6 h-6 text-amber-400" />
+                                                </div>
+                                                <p className="font-medium text-sm text-foreground">
+                                                    {accusedFile ? accusedFile.name : "Select Party B PDF"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <Textarea
+                                            placeholder="Paste Party B's counter deposition or statement here..."
+                                            value={accusedText}
+                                            onChange={(e) => setAccusedText(e.target.value)}
+                                            className="bg-black/30 border-white/15 min-h-[160px] text-xs font-mono"
+                                        />
+                                    )}
+                                </CardContent>
+                            </Card>
                         </div>
 
-                        {/* Input Mode Toggle */}
-                        <div className="flex justify-end gap-2">
-                            <Button
-                                type="button"
-                                variant={inputMode === "file" ? "default" : "outline"}
-                                size="sm"
-                                onClick={() => setInputMode("file")}
-                                className="text-xs font-mono"
-                            >
-                                <UploadCloud className="w-3.5 h-3.5 mr-1" /> PDF Upload
-                            </Button>
-                            <Button
-                                type="button"
-                                variant={inputMode === "text" ? "default" : "outline"}
-                                size="sm"
-                                onClick={() => setInputMode("text")}
-                                className="text-xs font-mono"
-                            >
-                                <FileEdit className="w-3.5 h-3.5 mr-1" /> Raw Transcript
-                            </Button>
-                        </div>
-
-                        {/* Input Forms */}
-                        <form onSubmit={handleSubmit} className="space-y-6">
-                            <div className="grid md:grid-cols-2 gap-6">
-                                {/* Client Testimony */}
-                                <Card className="glass-card hover-pop border-l-4 border-l-cyan-500 shadow-xl">
-                                    <CardHeader>
-                                        <div className="flex items-center justify-between">
-                                            <CardTitle className="text-lg flex items-center gap-2">
-                                                <FileText className="w-5 h-5 text-cyan-400" /> Client Testimony
-                                            </CardTitle>
-                                            <Badge variant="outline" className="text-xs font-mono text-cyan-400 border-cyan-500/30">
-                                                Plaintiff / Complainant
-                                            </Badge>
-                                        </div>
-                                        <CardDescription>
-                                            {inputMode === "file" ? "Upload Client statement PDF" : "Paste raw transcript text"}
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4">
-                                        {inputMode === "file" ? (
-                                            <div className="border-2 border-dashed border-cyan-500/30 hover:border-cyan-400/60 rounded-xl p-8 text-center bg-black/20 hover:bg-black/30 transition-all relative group cursor-pointer">
-                                                <input
-                                                    type="file"
-                                                    accept=".pdf"
-                                                    onChange={handleClientFileChange}
-                                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                                                />
-                                                <div className="flex flex-col items-center gap-2 pointer-events-none group-hover:scale-105 transition-transform duration-300">
-                                                    <div className="w-12 h-12 rounded-xl bg-cyan-500/15 flex items-center justify-center border border-cyan-500/30">
-                                                        {clientFile ? <FileText className="w-6 h-6 text-cyan-400" /> : <UploadCloud className="w-6 h-6 text-muted-foreground" />}
-                                                    </div>
-                                                    <p className="font-medium text-sm text-foreground">
-                                                        {clientFile ? clientFile.name : "Select Client PDF"}
-                                                    </p>
-                                                    <p className="text-xs text-muted-foreground">PDF up to 25MB</p>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <Textarea
-                                                placeholder="Paste the Client's verbatim deposition or transcript here (include dates, times, and quotes)..."
-                                                value={clientText}
-                                                onChange={(e) => setClientText(e.target.value)}
-                                                className="bg-black/30 border-white/15 min-h-[160px] text-xs font-mono leading-relaxed"
-                                            />
-                                        )}
-                                    </CardContent>
-                                </Card>
-
-                                {/* Accused Testimony */}
-                                <Card className="glass-card hover-pop border-l-4 border-l-amber-500 shadow-xl">
-                                    <CardHeader>
-                                        <div className="flex items-center justify-between">
-                                            <CardTitle className="text-lg flex items-center gap-2">
-                                                <FileText className="w-5 h-5 text-amber-400" /> Accused Testimony
-                                            </CardTitle>
-                                            <Badge variant="outline" className="text-xs font-mono text-amber-400 border-amber-500/30">
-                                                Defendant / Counter-party
-                                            </Badge>
-                                        </div>
-                                        <CardDescription>
-                                            {inputMode === "file" ? "Upload Accused statement PDF" : "Paste raw transcript text"}
-                                        </CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="space-y-4">
-                                        {inputMode === "file" ? (
-                                            <div className="border-2 border-dashed border-amber-500/30 hover:border-amber-400/60 rounded-xl p-8 text-center bg-black/20 hover:bg-black/30 transition-all relative group cursor-pointer">
-                                                <input
-                                                    type="file"
-                                                    accept=".pdf"
-                                                    onChange={handleAccusedFileChange}
-                                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                                                />
-                                                <div className="flex flex-col items-center gap-2 pointer-events-none group-hover:scale-105 transition-transform duration-300">
-                                                    <div className="w-12 h-12 rounded-xl bg-amber-500/15 flex items-center justify-center border border-amber-500/30">
-                                                        {accusedFile ? <FileText className="w-6 h-6 text-amber-400" /> : <UploadCloud className="w-6 h-6 text-muted-foreground" />}
-                                                    </div>
-                                                    <p className="font-medium text-sm text-foreground">
-                                                        {accusedFile ? accusedFile.name : "Select Accused PDF"}
-                                                    </p>
-                                                    <p className="text-xs text-muted-foreground">PDF up to 25MB</p>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <Textarea
-                                                placeholder="Paste the Accused party's transcript or statement here..."
-                                                value={accusedText}
-                                                onChange={(e) => setAccusedText(e.target.value)}
-                                                className="bg-black/30 border-white/15 min-h-[160px] text-xs font-mono leading-relaxed"
-                                            />
-                                        )}
-                                    </CardContent>
-                                </Card>
+                        {error && (
+                            <div className="p-4 rounded-xl bg-destructive/15 border border-destructive/40 text-destructive text-sm font-medium flex items-center gap-3">
+                                <AlertCircle className="w-5 h-5 shrink-0" />
+                                <span>{error}</span>
                             </div>
+                        )}
 
-                            {error && (
+                        <Button
+                            type="submit"
+                            size="lg"
+                            className="w-full h-14 text-base font-bold bg-gradient-to-r from-cyan-600 via-blue-600 to-amber-600 hover:from-cyan-500 hover:to-amber-500 shadow-[0_0_30px_rgba(56,189,248,0.3)]"
+                        >
+                            <Sparkles className="mr-3 h-5 w-5" /> Start Dynamic Interrogation Stream
+                        </Button>
+                    </form>
+                </div>
+            )}
+
+            {/* Stage 2: The Streaming "Flashing" Interrogation Stage */}
+            {isStreaming && (
+                <div className="min-h-[420px] flex flex-col items-center justify-center space-y-6">
+                    <div className="flex items-center gap-3 text-sm font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-500/30 px-4 py-2 rounded-full backdrop-blur-md">
+                        <Activity className="w-4 h-4 animate-spin text-cyan-400" />
+                        <span>{streamStatus || "Interrogating testimonies..."}</span>
+                    </div>
+
+                    <div className="w-full max-w-2xl h-[240px] flex items-center justify-center relative">
+                        <AnimatePresence mode="wait">
+                            {currentPair && (
                                 <motion.div
-                                    initial={{ opacity: 0, y: -10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    className="p-4 rounded-xl bg-destructive/15 border border-destructive/40 text-destructive text-sm font-medium flex items-center gap-3 shadow-lg"
+                                    key={currentPair.question}
+                                    initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.95, y: -15 }}
+                                    transition={{ duration: 0.35 }}
+                                    className="w-full"
                                 >
-                                    <AlertCircle className="w-5 h-5 shrink-0" />
-                                    <span>{error}</span>
+                                    <Card className="glass-card border-primary/30 shadow-[0_0_50px_rgba(56,189,248,0.2)] bg-black/60 backdrop-blur-xl p-6 relative overflow-hidden">
+                                        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-amber-500" />
+                                        <div className="mb-4">
+                                            <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground block mb-1">
+                                                Evaluating Interrogation Query
+                                            </span>
+                                            <h3 className="text-lg font-bold text-white tracking-tight">
+                                                "{currentPair.question}"
+                                            </h3>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-white/10">
+                                            <div className="space-y-1">
+                                                <span className="text-[11px] font-mono text-cyan-400 font-bold uppercase">Party A</span>
+                                                <p className="text-xs italic text-slate-300 line-clamp-3">"{currentPair.client_answer}"</p>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <span className="text-[11px] font-mono text-amber-400 font-bold uppercase">Party B</span>
+                                                <p className="text-xs italic text-slate-300 line-clamp-3">"{currentPair.accused_answer}"</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 flex justify-end">
+                                            <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground border-white/20">
+                                                {currentPair.match_status}
+                                            </Badge>
+                                        </div>
+                                    </Card>
                                 </motion.div>
                             )}
+                        </AnimatePresence>
+                    </div>
 
-                            <Button
-                                type="submit"
-                                size="lg"
-                                className="w-full h-14 text-base font-bold bg-gradient-to-r from-cyan-600 via-blue-600 to-amber-600 hover:from-cyan-500 hover:to-amber-500 shadow-[0_0_30px_rgba(56,189,248,0.3)] transition-all duration-300"
-                                disabled={loading}
-                            >
-                                {loading ? (
-                                    <>
-                                        <Loader2 className="mr-3 h-6 w-6 animate-spin" /> Cross-Examining Timelines (Map-Reduce)...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Sparkles className="mr-3 h-5 w-5" /> Execute Forensic Comparison
-                                    </>
-                                )}
-                            </Button>
-                        </form>
-                    </motion.div>
-                )}
+                    <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase">
+                        Streaming Active · Queries Appearing & Re-evaluating
+                    </p>
+                </div>
+            )}
 
-                {response && (
-                    <motion.div
-                        key="results"
-                        initial={{ opacity: 0, y: 30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ type: "spring", stiffness: 200, damping: 20 }}
-                        className="space-y-8"
-                    >
-                        {/* Summary Banner with 3D Canvas */}
-                        <div className="rounded-2xl glass-card border border-primary/20 p-6 shadow-2xl relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
-                            <div className="space-y-2 relative z-10">
-                                <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
-                                        <CheckCircle className="w-3.5 h-3.5 mr-1" /> Forensic Map-Reduce Complete
-                                    </Badge>
-                                </div>
-                                <h2 className="text-3xl font-extrabold tracking-tight text-white">
-                                    Comparative Cross-Examination
-                                </h2>
-                                <p className="text-muted-foreground text-sm">
-                                    Isolated {response.discrepancies?.length || 0} discrepancy anomalies across {((response.client_timeline?.events?.length || 0) + (response.accused_timeline?.events?.length || 0))} extracted chronological events.
-                                </p>
+            {/* Stage 3: The Unbiased Final Forensic Report */}
+            {isComplete && (
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="space-y-8"
+                >
+                    {/* Summary Card */}
+                    <div className="rounded-2xl glass-card border border-primary/20 p-6 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-6">
+                        <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+                                    <CheckCircle className="w-3.5 h-3.5 mr-1" /> Examination Complete
+                                </Badge>
                             </div>
-
-                            <div className="w-full md:w-64 h-28 relative z-10">
-                                <ThreeTimelineCanvas discrepancyCount={response.discrepancies?.length || 0} active={true} />
-                            </div>
+                            <h2 className="text-2xl font-extrabold tracking-tight text-white">
+                                Factual Alignment Matrix
+                            </h2>
+                            <p className="text-muted-foreground text-sm">
+                                Evaluated {finalResults.length} factual queries extracted by the local interrogator against both independent depositions.
+                            </p>
                         </div>
+                    </div>
 
-                        {/* Discrepancies Section */}
-                        <div className="space-y-4">
-                            <h3 className="text-2xl font-bold flex items-center gap-2">
-                                <AlertCircle className="w-6 h-6 text-red-400" /> Flagged Contradictions & Omissions
-                            </h3>
+                    {/* Results Grid */}
+                    <div className="space-y-4">
+                        <h3 className="text-xl font-bold flex items-center gap-2 text-white">
+                            <Layers className="w-5 h-5 text-cyan-400" /> Factual Discrepancy Breakdown
+                        </h3>
 
-                            {(!response.discrepancies || response.discrepancies.length === 0) ? (
-                                <Card className="glass-card py-16 text-center border-emerald-500/30">
-                                    <div className="flex justify-center mb-4">
-                                        <CheckCircle className="w-12 h-12 text-emerald-400 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
-                                    </div>
-                                    <CardTitle className="text-xl text-emerald-300">Testimonies Are Consistent</CardTitle>
-                                    <CardDescription className="max-w-md mx-auto mt-2">
-                                        No direct factual contradictions or critical timeline omissions were identified between the accounts.
-                                    </CardDescription>
-                                </Card>
-                            ) : (
-                                <div className="grid gap-6">
-                                    {response.discrepancies.map((disc, idx) => {
-                                        const isHigh = (disc.severity || "").toLowerCase() === "high"
-                                        const analysisText = disc.analysis || disc.reasoning || disc.explanation || "No detailed analytical breakdown provided."
+                        <div className="grid gap-4">
+                            {finalResults.map((item, idx) => {
+                                const isDiscrepancy = item.match_status === "Event details do not align"
+                                const isOmission = item.match_status === "Incomplete Event"
 
-                                        return (
-                                            <motion.div
-                                                key={idx}
-                                                initial={{ opacity: 0, x: -20 }}
-                                                animate={{ opacity: 1, x: 0 }}
-                                                transition={{ delay: idx * 0.1 }}
-                                            >
-                                                <Card className={`glass-card hover-pop overflow-hidden border-l-4 shadow-2xl ${isHigh
-                                                    ? "border-l-red-500 shadow-[0_5px_30px_-5px_rgba(239,68,68,0.2)]"
-                                                    : "border-l-amber-500 shadow-[0_5px_30px_-5px_rgba(245,158,11,0.2)]"
-                                                    }`}>
-                                                    <CardHeader className="bg-black/30 pb-4">
-                                                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                                                            <div className="flex items-center gap-3">
-                                                                <Badge variant="outline" className={`font-mono text-xs font-bold ${disc.type === "Direct Conflict"
-                                                                    ? "text-red-400 border-red-500/30 bg-red-500/10"
-                                                                    : "text-amber-400 border-amber-500/30 bg-amber-500/10"
-                                                                    }`}>
-                                                                    {disc.type || "Discrepancy"}
-                                                                </Badge>
-                                                                <Badge variant="secondary" className="text-xs font-mono bg-white/10">
-                                                                    {disc.timeframe || "Undated"}
-                                                                </Badge>
-                                                            </div>
-                                                            <Badge className={`text-xs font-mono uppercase font-bold ${isHigh ? "bg-red-500 text-white" : "bg-amber-500 text-black"
-                                                                }`}>
-                                                                {disc.severity || "MODERATE"} Impact
-                                                            </Badge>
-                                                        </div>
-                                                        <div className="prose prose-invert max-w-none text-sm text-foreground/90 font-medium">
-                                                            <ReactMarkdown>{analysisText}</ReactMarkdown>
-                                                        </div>
-                                                    </CardHeader>
+                                return (
+                                    <Card 
+                                        key={idx} 
+                                        className={`glass-card border-l-4 overflow-hidden ${
+                                            isDiscrepancy 
+                                                ? "border-l-red-500 bg-red-950/10" 
+                                                : isOmission 
+                                                ? "border-l-amber-500 bg-amber-950/10" 
+                                                : "border-l-emerald-500 bg-emerald-950/10"
+                                        }`}
+                                    >
+                                        <CardHeader className="pb-2">
+                                            <div className="flex items-center justify-between">
+                                                <CardTitle className="text-base font-bold text-white">
+                                                    {item.question}
+                                                </CardTitle>
+                                                <Badge variant="outline" className={`font-mono text-xs ${
+                                                    isDiscrepancy 
+                                                        ? "text-red-400 border-red-500/30 bg-red-500/10" 
+                                                        : isOmission 
+                                                        ? "text-amber-400 border-amber-500/30 bg-amber-500/10" 
+                                                        : "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+                                                }`}>
+                                                    {item.match_status}
+                                                </Badge>
+                                            </div>
+                                        </CardHeader>
 
-                                                    <CardContent className="grid md:grid-cols-2 gap-4 p-4 bg-black/10">
-                                                        {disc.client_version && (
-                                                            <div className="space-y-1.5">
-                                                                <div className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                                                                    <span className="w-2 h-2 rounded-full bg-cyan-400" /> Client Statement
-                                                                </div>
-                                                                <div className="text-xs sm:text-sm p-3.5 rounded-xl bg-cyan-500/5 border border-cyan-500/20 italic font-mono text-slate-200">
-                                                                    "{disc.client_version}"
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                        {disc.accused_version && (
-                                                            <div className="space-y-1.5">
-                                                                <div className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                                                                    <span className="w-2 h-2 rounded-full bg-amber-400" /> Accused Statement
-                                                                </div>
-                                                                <div className="text-xs sm:text-sm p-3.5 rounded-xl bg-amber-500/5 border border-amber-500/20 italic font-mono text-slate-200">
-                                                                    "{disc.accused_version}"
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </CardContent>
-                                                </Card>
-                                            </motion.div>
-                                        )
-                                    })}
-                                </div>
-                            )}
+                                        <CardContent className="grid md:grid-cols-2 gap-4 pt-2">
+                                            <div className="space-y-1 p-3 rounded-lg bg-black/30 border border-white/5">
+                                                <span className="text-[11px] font-mono text-cyan-400 uppercase font-bold">Party A Account</span>
+                                                <p className="text-xs font-mono text-slate-200">"{item.client_answer}"</p>
+                                            </div>
+
+                                            <div className="space-y-1 p-3 rounded-lg bg-black/30 border border-white/5">
+                                                <span className="text-[11px] font-mono text-amber-400 uppercase font-bold">Party B Account</span>
+                                                <p className="text-xs font-mono text-slate-200">"{item.accused_answer}"</p>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )
+                            })}
                         </div>
-
-                        {/* Extracted Timelines Reference */}
-                        <div className="mt-12 space-y-4">
-                            <h3 className="text-xl font-bold flex items-center gap-2 text-muted-foreground">
-                                <History className="w-5 h-5" /> Chronological Timeline Mapping
-                            </h3>
-                            <div className="grid lg:grid-cols-2 gap-6">
-                                <TimelineView timeline={response.client_timeline} accentColor="cyan" />
-                                <TimelineView timeline={response.accused_timeline} accentColor="amber" />
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    </div>
+                </motion.div>
+            )}
         </div>
     )
 }

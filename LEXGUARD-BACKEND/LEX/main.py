@@ -1,22 +1,28 @@
+from __future__ import annotations
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Security, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification, T5Tokenizer, T5ForConditionalGeneration
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 import os
-import fitz  # PyMuPDF
-import jwt   # PyJWT
+import fitz
+import jwt
 import numpy as np
 import torch
 import asyncio
 import re
+import json
 from dotenv import load_dotenv
 import sys
 import io
+
+os.environ["USE_TF"] = "0"
+os.environ["USE_TORCH"] = "1"
 
 # Ensure UTF-8 stdout on Windows
 if sys.stdout and hasattr(sys.stdout, 'buffer'):
@@ -390,175 +396,159 @@ async def analyze_document(
 
 # --- TESTIMONY VALIDATOR (Hybrid Local NLI + Few-Shot Groq Map-Reduce) ---
 
-FEW_SHOT_DISCREPANCY_PROMPT = """You are a senior forensic legal auditor and cross-examination expert.
-You compare witness testimonies and timelines between opposing parties (Client vs Accused).
+print("Loading Interrogator Model (Local T5 QG)...")
+try:
+    from transformers import T5Tokenizer, T5ForConditionalGeneration
+    qg_tokenizer = T5Tokenizer.from_pretrained("doc2query/msmarco-t5-base-v1", local_files_only=False)
+    qg_model = T5ForConditionalGeneration.from_pretrained("doc2query/msmarco-t5-base-v1", local_files_only=False)
+    qg_model.to(device_name.lower() if device_name == "cuda" else "cpu")
+    print(f"[OK] Interrogator QG Model Loaded")
+except Exception as e:
+    print(f"[ERROR] Interrogator QG failed to load: {e}")
 
-Your objective is to identify genuine factual discrepancies, direct contradictions, and material omissions.
-
-Below are exemplary few-shot demonstrations:
-
-[FEW-SHOT EXAMPLE 1 - DIRECT CONFLICT]
-Client Version: "Event occurred on March 14 at 10:00 PM in the corporate boardroom."
-Accused Version: "Accused claims the office was fully vacated by 6:00 PM and remained locked."
-Evaluation:
-- Type: Direct Conflict
-- Timeframe: March 14, 2024 (Evening)
-- Severity: High
-- Reasoning: Direct timeline and physical presence contradiction regarding building access.
-
-[FEW-SHOT EXAMPLE 2 - MATERIAL OMISSION]
-Client Version: "A formal written grievance letter was handed directly to the director on June 2nd."
-Accused Version: "Director states no notifications or complaints were received throughout June."
-Evaluation:
-- Type: Omission
-- Timeframe: June 2, 2024
-- Severity: Medium
-- Reasoning: Accused omits documented delivery of formal grievance notice.
-
-[FEW-SHOT EXAMPLE 3 - SUPERFICIAL VARIATION / NO DISCREPANCY]
-Client Version: "We delivered the software package 5 days later due to federal bank holidays."
-Accused Version: "The project deployment was completed on day 35 instead of day 30."
-Evaluation:
-- Type: None / Excluded
-- Reasoning: Both parties agree on the 5-day variance; explanation aligns with legal working days. Do not flag as discrepancy.
-"""
-
-async def extract_timeline(transcript_text: str, party_name: str) -> Timeline:
-    """Map Phase: Extract chronological events from a single transcript."""
-    print(f"[MAP] Extracting timeline for {party_name}...")
-    structured_analyst = analyst.with_structured_output(Timeline)
+# --- HELPER: LOCAL QUESTION GENERATION ---
+def generate_local_questions(text: str, max_questions: int = 5) -> list[str]:
+    """Uses local T5 to generate relevant interrogation questions from the text."""
+    # Grab the most substantial sentences to generate questions
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 40]
+    target_sentences = sentences[:max_questions] # Keep it token-cheap
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a forensic legal analyst. Extract a chronological timeline of events for {party_name} from the transcript. Ensure exact source quotes are included."),
-        ("human", "{transcript_text}")
-    ])
-    
-    try:
-        timeline = await (prompt | structured_analyst).ainvoke({
-            "party_name": party_name,
-            "transcript_text": transcript_text
-        })
-        return timeline
-    except Exception as e:
-        print(f"[ERROR] Failed to extract timeline for {party_name}: {e}")
-        return Timeline(party=party_name, events=[])
+    questions = set()
+    for sentence in target_sentences:
+        input_ids = qg_tokenizer.encode(sentence, return_tensors='pt').to(qg_model.device)
+        outputs = qg_model.generate(
+            input_ids=input_ids,
+            max_length=64,
+            do_sample=True,
+            top_k=10,
+            num_return_sequences=1
+        )
+        q = qg_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        if "?" in q:
+            # Clean formatting
+            q = q.split("?")[0] + "?"
+            questions.add(q.capitalize())
+            
+    return list(questions)
 
-async def compare_timelines_with_local_triage(
-    client_timeline: Timeline,
-    accused_timeline: Timeline,
-    triage_candidates: list[dict]
-) -> ComparativeAnalysisResult:
-    """
-    Reduce Phase: Evaluates candidate discrepancies triaged by local NLI, 
-    using Few-Shot Groq prompting to output structured Discrepancies.
-    """
-    print(f"[REDUCE] Comparing timelines with {len(triage_candidates)} pre-filtered candidate pairs...")
+# --- HELPER: GROQ PARALLEL QUERYING ---
+async def extract_answers_from_text(questions: list[str], text: str, role: str) -> dict:
+    """Asks Groq to answer the list of questions strictly based on the provided text."""
     
-    class DiscrepancyReport(BaseModel):
-        discrepancies: list[Discrepancy]
-        
-    structured_analyst = analyst.with_structured_output(DiscrepancyReport)
-    
-    system_prompt = f"""{FEW_SHOT_DISCREPANCY_PROMPT}
-
-Analyze the suspect candidate pairs flagged by our local vector model and cross-encoder, along with the full timelines.
-Extract all material discrepancies strictly matching the schema."""
-    
-    # Format candidate summary to guide Groq directly to suspicious points
-    candidate_summary = "\n".join([
-        f"- Candidate {idx+1} (Local NLI Contradiction Confidence: {c.get('contradiction_prob', 0):.2f}):\n"
-        f"  Client Claim: \"{c['client_claim']}\"\n"
-        f"  Accused Claim: \"{c['accused_claim']}\""
-        for idx, c in enumerate(triage_candidates)
-    ]) if triage_candidates else "No local high-risk contradictory claims pre-flagged."
+    # We ask Groq to return a strict JSON dictionary { "Question 1": "Answer", ... }
+    system_prompt = f"""You are a neutral fact-extractor. 
+Read the {role} testimony carefully. 
+Answer the provided questions strictly using the facts stated in the text.
+If the text does not contain the answer, your exact response MUST be: "Not mentioned."
+Output valid JSON where keys are the exact questions, and values are the answers."""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        ("human", """=== PRE-FILTERED SUSPECT PAIRS (LOCAL NLI) ===
-{candidate_summary}
-
-=== CLIENT TIMELINE ===
-{client_timeline}
-
-=== ACCUSED TIMELINE ===
-{accused_timeline}""")
+        ("human", "QUESTIONS:\n{questions}\n\nTEXT:\n{text}")
     ])
     
     try:
-        report = await (prompt | structured_analyst).ainvoke({
-            "candidate_summary": candidate_summary,
-            "client_timeline": client_timeline.model_dump_json(indent=2),
-            "accused_timeline": accused_timeline.model_dump_json(indent=2)
+        response = await analyst.ainvoke({
+            "questions": json.dumps(questions),
+            "text": text
         })
-        return ComparativeAnalysisResult(
-            client_timeline=client_timeline,
-            accused_timeline=accused_timeline,
-            discrepancies=report.discrepancies
-        )
+        
+        # Parse JSON output from Groq
+        raw_content = response.content
+        # Strip markdown json blocks if present
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:-3]
+            
+        return json.loads(raw_content.strip())
     except Exception as e:
-        print(f"[ERROR] Failed to compare timelines: {e}")
-        return ComparativeAnalysisResult(
-            client_timeline=client_timeline,
-            accused_timeline=accused_timeline,
-            discrepancies=[]
-        )
+        print(f"[ERROR] Groq extraction failed for {role}: {e}")
+        return {q: "Error retrieving data" for q in questions}
 
-@app.post("/compare_testimonies", response_model=ComparativeAnalysisResult)
-async def analyze_testimonies(
+# --- ENDPOINT: STREAMING COMPARATOR ---
+@app.post("/stream_compare_testimonies")
+async def stream_compare_testimonies(
     client_file: UploadFile = File(None),
     client_text: str = Form(None),
     accused_file: UploadFile = File(None),
     accused_text: str = Form(None),
-    user_id: str = Depends(verify_clerk_token)
+    # user_id: str = Depends(verify_clerk_token) # Uncomment in prod
 ):
     """
-    Testimony Validator Endpoint:
-    1. Ingests transcripts.
-    2. Runs Local Scout (Embeddings) + Sentinel (DeBERTa NLI) to find high-probability contradictory claims.
-    3. Concurrently extracts structured timelines via Groq.
-    4. Evaluates discrepancies via Few-Shot Groq Analyst.
+    Streaming Endpoint (Server-Sent Events).
+    1. Local T5 generates questions from Client text.
+    2. Groq queries BOTH texts in parallel.
+    3. Streams results row-by-row to the frontend for the flashing UI.
     """
-    print(f"[API] Testimony Validator requested by user {user_id}")
     
-    # 1. Resolve Inputs
+    # 1. Resolve inputs
     async def resolve_input(file: UploadFile, text: str) -> str:
         if file and file.filename:
             content = await file.read()
             if file.filename.lower().endswith(".pdf"):
-                clauses = extract_text_from_pdf(content)
-                return " ".join(clauses)
-            else:
-                return content.decode("utf-8", errors="ignore")
-        elif text and text.strip():
-            return text
-        else:
-            raise HTTPException(status_code=400, detail="Missing testimony input (provide file or text).")
+                return " ".join(extract_text_from_pdf(content))
+            return content.decode("utf-8", errors="ignore")
+        return text or ""
             
-    client_content = await resolve_input(client_file, client_text)
-    accused_content = await resolve_input(accused_file, accused_text)
-    
-    # 2. Local Triage Pass (Offload non-contradictory transcript noise)
-    print("[LOCAL TRIAGE] Segmenting statements and running Sentinel NLI...")
-    client_stmts = segment_transcript_statements(client_content)
-    accused_stmts = segment_transcript_statements(accused_content)
-    
-    # Filter suspicious pairs locally using Sentence-BERT and DeBERTa CrossEncoder
-    triage_candidates = local_triage_testimony_pairs(client_stmts, accused_stmts, top_k=2)
-    print(f"[LOCAL TRIAGE] Pre-flagged {len(triage_candidates)} high-suspicion contradictory pairs.")
+    c_content = await resolve_input(client_file, client_text)
+    a_content = await resolve_input(accused_file, accused_text)
 
-    # 3. Map Phase: Extract Timelines Concurrently
-    print("[MAP Phase] Starting concurrent timeline extraction via Groq...")
-    client_timeline, accused_timeline = await asyncio.gather(
-        extract_timeline(client_content, "Client"),
-        extract_timeline(accused_content, "Accused")
-    )
+    if not c_content or not a_content:
+        raise HTTPException(status_code=400, detail="Missing testimony data.")
+
+    # 2. Generator for Server-Sent Events (SSE)
+    async def event_generator():
+        try:
+            # Event: Booting up / Generating Questions
+            yield f"data: {json.dumps({'status': 'initializing', 'msg': 'Local AI extracting core interrogations...'})}\n\n"
+            await asyncio.sleep(0.5)
+
+            # Local T5 Execution
+            questions = generate_local_questions(c_content, max_questions=6)
+            if not questions:
+                questions = ["What are the main events described?", "Who was involved?"]
+                
+            yield f"data: {json.dumps({'status': 'questions_ready', 'msg': f'Generated {len(questions)} factual queries.'})}\n\n"
+            
+            # Event: Querying Groq in Parallel
+            yield f"data: {json.dumps({'status': 'querying', 'msg': 'Querying independent testimonies via Groq LPU...'})}\n\n"
+            
+            # Fire both Groq prompts SIMULTANEOUSLY
+            client_answers, accused_answers = await asyncio.gather(
+                extract_answers_from_text(questions, c_content, "Client"),
+                extract_answers_from_text(questions, a_content, "Accused")
+            )
+            
+            # Event: Streaming the Matrix Comparison Row-by-Row
+            for q in questions:
+                ans_c = client_answers.get(q, "Not mentioned.")
+                ans_a = accused_answers.get(q, "Not mentioned.")
+                
+                # Unbiased logic check
+                is_omission = "Not mentioned" in ans_c or "Not mentioned" in ans_a
+                match_status = "Incomplete Event" if is_omission else "Event details do not align"
+                if ans_c.lower() == ans_a.lower() and not is_omission:
+                    match_status = "Accounts Align"
+
+                payload = {
+                    "status": "flashing_pair",
+                    "question": q,
+                    "client_answer": ans_c,
+                    "accused_answer": ans_a,
+                    "match_status": match_status
+                }
+                
+                # Stream the payload to Vercel instantly
+                yield f"data: {json.dumps(payload)}\n\n"
+                
+                # Pause for 2 seconds to allow the Frontend UI to flash it on screen
+                await asyncio.sleep(2.0)
+                
+            # Close Stream
+            yield f"data: {json.dumps({'status': 'done', 'msg': 'Forensic evaluation complete.'})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'msg': str(e)})}\n\n"
+
+    # Return HTTP Stream
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
     
-    # 4. Reduce Phase: Comparative Analysis with Few-Shot Guided Prompting
-    print("[REDUCE Phase] Synthesizing final comparative report...")
-    result = await compare_timelines_with_local_triage(
-        client_timeline=client_timeline,
-        accused_timeline=accused_timeline,
-        triage_candidates=triage_candidates
-    )
-    
-    return result
