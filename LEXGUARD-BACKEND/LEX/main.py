@@ -160,19 +160,20 @@ except Exception as e:
     qg_tokenizer = None
     qg_model = None
 
-# 5. THE ANALYST (Groq Reasoning Engine)
+# 5. THE ANALYST (Fast 20B Tier with strict max_tokens & timeout to eliminate freezing)
 if not GROQ_API_KEY:
     print("[WARNING] GROQ_API_KEY not found in environment.", flush=True)
 
-DEFAULT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+DEFAULT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 analyst = ChatGroq(
     temperature=0,
     model_name=DEFAULT_MODEL,
     groq_api_key=GROQ_API_KEY,
-    request_timeout=35.0,
+    request_timeout=25.0,
+    max_tokens=300,  # Prevents runaway responses & slashes response time
     max_retries=2
 )
-print(f"[OK] Analyst Model Configured: {DEFAULT_MODEL}", flush=True)
+print(f"[OK] Analyst Model Configured: {DEFAULT_MODEL} (High-Speed Tier)", flush=True)
 
 # --- HELPER FUNCTIONS ---
 
@@ -223,9 +224,9 @@ Detection Reason: {source_str}
 User's Constraint Rule: {user_rule if user_rule else "None"}
 
 Task:
-1. Summarize this clause in plain English.
-2. If the user provided a rule, EXPLICITLY check if this clause violates it.
-3. If it is risky, suggest a safer rewrite."""
+1. Summarize this clause in 1-2 plain English sentences.
+2. If the user provided a rule, state whether this clause violates it.
+3. If risky, provide a short, balanced rewrite. Keep your entire response under 150 words."""
     
     messages = [
         SystemMessage(content=system_msg),
@@ -252,7 +253,7 @@ Task:
 
 async def generate_dynamic_questions_groq(text: str, max_items: int = 5) -> list[dict]:
     """
-    Extracts factual queries from Party A that focus strictly on observable anchor points
+    Extracts factual queries from Party A focusing strictly on observable anchor points
     (time, location, movements, doors, confrontations) that Party B (the accused) can speak to.
     """
     system_prompt = """You are a senior forensic legal interrogator.
@@ -261,18 +262,18 @@ Your goal is to extract factual queries from Party A's deposition that the OTHER
 CRITICAL RULES:
 1. NEVER frame questions around Party A's private internal actions (e.g., do NOT ask "Why did Party A go to buy groceries?" or "What was Party A thinking?").
 2. Focus on SHARED EXTERNAL EVENTS that Party B / Accused was either present for or accused of:
-   - What time did the incident or encounter take place?
+   - What time did the incident, arrival, or encounter take place?
    - What specific area of the premises (e.g. register, electronics aisle, exit door) is involved?
    - What specific actions, movements, or interactions are alleged regarding the accused?
-   - What exit or vehicle was allegedly used?
+   - What exit or parking area was allegedly used?
 3. For each query, quote Party A's exact sentence answering it as 'party_a_fact'.
 4. Respond ONLY with a valid JSON object matching:
 {
   "queries": [
     {
       "id": 0,
-      "question": "What time did the encounter or incident take place near the register area?",
-      "party_a_fact": "On March 14, I arrived at the store around 6:15 PM and noticed the accused near the registers."
+      "question": "At what time and through which door did the accused allegedly exit the store?",
+      "party_a_fact": "Security reviewed footage and pointed me toward the accused, who had exited through the side door near the pharmacy at approximately 6:35 PM."
     }
   ]
 }"""
@@ -353,8 +354,7 @@ def generate_dynamic_questions_local_t5(text: str, max_items: int = 5) -> list[d
 
 def extract_party_b_local_fallback(factual_pairs: list[dict], party_b_text: str) -> dict[int, str]:
     """
-    Local CPU Fallback: If Groq returns empty/unmentioned for everything, uses Scout (Sentence-BERT)
-    to find the most relevant factual sentence in Party B's testimony.
+    Local CPU Fallback: Uses Scout (Sentence-BERT) to find the most relevant sentence in Party B's text.
     """
     b_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', party_b_text) if len(s.strip()) > 15]
     if not b_sentences or not scout:
@@ -389,14 +389,14 @@ async def extract_party_b_answers(factual_pairs: list[dict], party_b_text: str) 
     system_prompt = """You are an objective forensic legal cross-examiner.
 You are examining Party B's deposition against factual queries arising from Party A's account.
 
-CRITICAL IDENTITY AND RULES:
+CRITICAL RULES:
 1. Party B IS the accused / respondent. Party B speaks using "I", "me", or "my".
-2. If a query touches upon a time, location, or event that Party B discusses:
-   - State Party B's version of that fact (e.g., "Party B states they were in the pharmacy aisle at 6:30 PM, not near the registers.").
-   - If Party B denies the occurrence or offers an alibi, report that denial concisely.
-3. DO NOT BE OVERLY RIGID. If the query asks about the time or location of the incident, and Party B mentions their own arrival, departure, or location during that period, THAT IS PARTY B'S ACCOUNT. Do not say "Not mentioned."
+2. If a query touches upon a time, location, exit, or event that Party B discusses:
+   - State Party B's version of that fact (e.g., "Party B states they were at the pharmacy counter, not in the electronics aisle.").
+   - If Party B denies the occurrence or gives a different timeframe/door, report that counter-statement concisely.
+3. DO NOT BE OVERLY RIGID. If Party B mentions their arrival, departure, or location during that period, THAT IS PARTY B'S ACCOUNT. Do not say "Not mentioned."
 4. ONLY write "Not mentioned." if Party B's entire deposition has zero information related to that timeframe, location, or interaction.
-5. Respond ONLY with a valid JSON object matching:
+5. Respond ONLY with a valid JSON object:
 {
   "answers": [
     {"id": 0, "answer": "Party B's statement, denial, or counter-account"}
@@ -414,16 +414,12 @@ CRITICAL IDENTITY AND RULES:
         response = await analyst.ainvoke(messages)
         raw_content = response.content.strip()
         
-        # 1. Clean reasoning tags & markdown
         raw_content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
         if "```" in raw_content:
             raw_content = re.sub(r"```(?:json)?", "", raw_content).replace("```", "").strip()
 
-        print(f"[DEBUG Party B Output]: {raw_content[:300]}...", flush=True)
-
         results_map = {}
 
-        # 2. Parse JSON
         json_match = re.search(r"(\{|\[).*(\}|\])", raw_content, re.DOTALL)
         if json_match:
             try:
@@ -436,7 +432,6 @@ CRITICAL IDENTITY AND RULES:
                             id_digits = re.findall(r"\d+", str(raw_id))
                             matched_id = int(id_digits[0]) if id_digits else idx
                             
-                            # Handle 1-based indexing if LLM counted 1..N
                             if matched_id not in [p["id"] for p in factual_pairs] and idx < len(factual_pairs):
                                 matched_id = factual_pairs[idx]["id"]
                                 
@@ -444,7 +439,6 @@ CRITICAL IDENTITY AND RULES:
             except Exception as json_err:
                 print(f"[PARTY B JSON PARSE NOTICE]: {json_err}", flush=True)
 
-        # 3. Regex Fallback if JSON parsing missed any fields
         if not results_map:
             answer_matches = re.findall(r'"answer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw_content)
             if answer_matches:
@@ -452,10 +446,9 @@ CRITICAL IDENTITY AND RULES:
                     target_id = factual_pairs[idx]["id"]
                     results_map[target_id] = ans_text.replace('\\"', '"').strip()
 
-        # Check if the LLM returned "Not mentioned." for all items despite testimony being present
         all_unmentioned = all("not mentioned" in results_map.get(item["id"], "").lower() for item in factual_pairs)
         if all_unmentioned:
-            print("[NOTICE] LLM returned 'Not mentioned.' for all items. Engaging Scout semantic matcher...", flush=True)
+            print("[NOTICE] LLM returned 'Not mentioned.' for all items. Engaging Scout matcher...", flush=True)
             return await asyncio.to_thread(extract_party_b_local_fallback, factual_pairs, party_b_text)
 
         for item in factual_pairs:
@@ -465,9 +458,8 @@ CRITICAL IDENTITY AND RULES:
         return results_map
 
     except Exception as api_err:
-        print(f"[ERROR in Party B Extraction]: {api_err}. Engaging Scout semantic search fallback...", flush=True)
+        print(f"[ERROR in Party B Extraction]: {api_err}. Engaging Scout fallback...", flush=True)
 
-    # Local fallback if Groq call failed or timed out
     return await asyncio.to_thread(extract_party_b_local_fallback, factual_pairs, party_b_text)
 
 # --- API ENDPOINTS ---
@@ -481,6 +473,7 @@ async def health_check():
     diagnostic["key_present"] = bool(GROQ_API_KEY)
     diagnostic["key_length"] = len(GROQ_API_KEY) if GROQ_API_KEY else 0
     diagnostic["key_format_valid"] = (GROQ_API_KEY.startswith("gsk_") and len(GROQ_API_KEY) > 20) if GROQ_API_KEY else False
+    diagnostic["active_model"] = DEFAULT_MODEL
 
     try:
         ip = await asyncio.to_thread(socket.gethostbyname, "api.groq.com")
@@ -557,35 +550,41 @@ async def analyze_document(
             if sim_scores[idx] > 0.30:
                 semantic_matches.add(int(idx))
 
+    # Priority queue: sort by model confidence and take top 8 highest-priority risks
+    flagged_indices = [
+        (i, clause, pred) for i, (clause, pred) in enumerate(zip(clauses, sniper_preds))
+        if label_map.get(pred['label'], "Safe") != "Safe" or i in semantic_matches
+    ]
+    flagged_indices.sort(key=lambda x: x[2]['score'], reverse=True)
+    top_flagged = flagged_indices[:8]
+
     analysis_tasks = []
-    for i, (clause, pred) in enumerate(zip(clauses, sniper_preds)):
+    for i, clause, pred in top_flagged:
         label_str = pred['label']
         risk_type = label_map.get(label_str, "Safe")
         is_sniper_risk = risk_type != "Safe"
-        is_scout_match = i in semantic_matches
         
-        if is_sniper_risk or is_scout_match:
-            detection_source = []
-            if is_sniper_risk: 
-                detection_source.append(f"Sniper Flagged ({risk_type})")
-            if is_scout_match: 
-                detection_source.append("Scout Matched User Rule")
-            
-            source_str = " + ".join(detection_source)
-            assigned_risk = risk_type if is_sniper_risk else "Potential Rule Violation"
-            
-            task = process_analyst_evaluation(
-                clause=clause,
-                user_rule=user_rule,
-                source_str=source_str,
-                index=i,
-                pred_score=pred['score'],
-                risk_type=assigned_risk
-            )
-            analysis_tasks.append(task)
+        detection_source = []
+        if is_sniper_risk: 
+            detection_source.append(f"Sniper Flagged ({risk_type})")
+        if i in semantic_matches: 
+            detection_source.append("Scout Matched User Rule")
+        
+        source_str = " + ".join(detection_source)
+        assigned_risk = risk_type if is_sniper_risk else "Potential Rule Violation"
+        
+        task = process_analyst_evaluation(
+            clause=clause,
+            user_rule=user_rule,
+            source_str=source_str,
+            index=i,
+            pred_score=pred['score'],
+            risk_type=assigned_risk
+        )
+        analysis_tasks.append(task)
 
-    # Throttled execution to protect free tier rate limits
-    sem = asyncio.Semaphore(4)
+    # Throttled execution (max 3 concurrent) so Groq never rate-limits or freezes
+    sem = asyncio.Semaphore(3)
     async def bounded_task(t):
         async with sem:
             return await t
@@ -669,12 +668,11 @@ async def stream_compare_testimonies(
                         emb_a = scout.encode([ans_a])
                         emb_b = scout.encode([ans_b])
                         sim = float(cosine_similarity(emb_a, emb_b)[0][0])
-                        if sim > 0.65:
+                        # High threshold: true factual alignment requires high topical and directional agreement
+                        if sim > 0.70:
                             match_status = "Accounts Align"
-                        elif sim < 0.35:
-                            match_status = "Event details do not align"
                         else:
-                            match_status = "Accounts Partially Align"
+                            match_status = "Event details do not align"
                     except Exception:
                         match_status = "Accounts Align" if ans_a.strip().lower() == ans_b.strip().lower() else "Event details do not align"
                 else:
